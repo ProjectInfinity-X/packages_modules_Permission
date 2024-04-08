@@ -16,7 +16,6 @@
 
 package com.android.permissioncontroller.role.ui.handheld;
 
-import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.UserHandle;
@@ -25,9 +24,10 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
-import androidx.preference.TwoStatePreference;
 
 import com.android.permissioncontroller.role.ui.DefaultAppChildFragment;
+import com.android.permissioncontroller.role.ui.RoleApplicationPreference;
+import com.android.settingslib.widget.FooterPreference;
 
 /**
  * Handheld preference fragment for a default app.
@@ -95,14 +95,14 @@ public class HandheldDefaultAppPreferenceFragment extends PreferenceFragmentComp
 
     @NonNull
     @Override
-    public TwoStatePreference createApplicationPreference(@NonNull Context context) {
-        return new AppIconRadioButtonPreference(context);
+    public RoleApplicationPreference createApplicationPreference() {
+        return new HandheldRadioPreference(requireContext());
     }
 
     @NonNull
     @Override
-    public Preference createFooterPreference(@NonNull Context context) {
-        return new FooterPreference(context);
+    public Preference createFooterPreference() {
+        return new FooterPreference(requireContext());
     }
 
     @Override

@@ -16,20 +16,22 @@
 
 package com.android.permissioncontroller.permission.ui;
 
+import static android.app.PendingIntent.FLAG_IMMUTABLE;
 import static android.app.PendingIntent.FLAG_UPDATE_CURRENT;
 import static android.app.PendingIntent.getActivity;
+import static android.app.admin.DevicePolicyResources.Strings.PermissionSettings.LOCATION_AUTO_GRANTED_MESSAGE;
 import static android.content.Intent.ACTION_MANAGE_APP_PERMISSION;
 import static android.content.Intent.EXTRA_PACKAGE_NAME;
 import static android.content.Intent.EXTRA_PERMISSION_GROUP_NAME;
 import static android.content.Intent.EXTRA_USER;
 import static android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK;
 import static android.content.Intent.FLAG_ACTIVITY_NEW_TASK;
-import static android.graphics.Bitmap.Config.ARGB_8888;
-import static android.graphics.Bitmap.createBitmap;
 import static android.os.UserHandle.getUserHandleForUid;
 
 import static com.android.permissioncontroller.Constants.ADMIN_AUTO_GRANTED_PERMISSIONS_ALERTING_NOTIFICATION_CHANNEL_ID;
 import static com.android.permissioncontroller.Constants.ADMIN_AUTO_GRANTED_PERMISSIONS_NOTIFICATION_CHANNEL_ID;
+import static com.android.permissioncontroller.Constants.ADMIN_AUTO_GRANTED_PERMISSIONS_NOTIFICATION_GROUP_ID;
+import static com.android.permissioncontroller.Constants.ADMIN_AUTO_GRANTED_PERMISSIONS_NOTIFICATION_SUMMARY_ID;
 import static com.android.permissioncontroller.Constants.EXTRA_SESSION_ID;
 import static com.android.permissioncontroller.Constants.PERMISSION_GRANTED_BY_ADMIN_NOTIFICATION_ID;
 import static com.android.permissioncontroller.permission.utils.Utils.getSystemServiceSafe;
@@ -45,18 +47,19 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.UserHandle;
 import android.provider.Settings;
+import android.service.notification.StatusBarNotification;
 import android.util.ArraySet;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.android.permissioncontroller.R;
+import com.android.permissioncontroller.permission.utils.KotlinUtils;
+import com.android.permissioncontroller.permission.utils.Utils;
 
 import java.util.ArrayList;
 
@@ -93,24 +96,23 @@ public class AutoGrantPermissionsNotifier {
      */
     private final ArrayList<String> mGrantedPermissions = new ArrayList<>();
 
+    private final NotificationManager mNotificationManager;
+
     public AutoGrantPermissionsNotifier(@NonNull Context context,
             @NonNull PackageInfo packageInfo) {
         mPackageInfo = packageInfo;
+        mNotificationManager = getSystemServiceSafe(context, NotificationManager.class);
         UserHandle callingUser = getUserHandleForUid(mPackageInfo.applicationInfo.uid);
         mContext = context.createContextAsUser(callingUser, 0);
     }
 
     /**
-     * Create the channel to which the notification about auto-granted permission should be posted
-     * to.
+     * Create the channel to which the notification about auto-granted permission should be posted.
      *
      * @param user The user for which the permission was auto-granted.
      * @param shouldAlertUser
      */
     private void createAutoGrantNotifierChannel(boolean shouldNotifySilently) {
-        NotificationManager notificationManager = getSystemServiceSafe(mContext,
-                NotificationManager.class);
-
         NotificationChannel autoGrantedPermissionsChannel = new NotificationChannel(
                 getNotificationChannelId(shouldNotifySilently),
                 mContext.getString(R.string.auto_granted_permissions),
@@ -119,7 +121,7 @@ public class AutoGrantPermissionsNotifier {
             autoGrantedPermissionsChannel.enableVibration(false);
             autoGrantedPermissionsChannel.setSound(Uri.EMPTY, null);
         }
-        notificationManager.createNotificationChannel(autoGrantedPermissionsChannel);
+        mNotificationManager.createNotificationChannel(autoGrantedPermissionsChannel);
     }
 
     /**
@@ -140,7 +142,8 @@ public class AutoGrantPermissionsNotifier {
         long sessionId = getValidSessionId();
 
         Intent manageAppPermission = getSettingsPermissionIntent(sessionId);
-        Bitmap pkgIconBmp = getPackageIcon(pm.getApplicationIcon(mPackageInfo.applicationInfo));
+        Bitmap pkgIconBmp = KotlinUtils.INSTANCE.convertToBitmap(
+                pm.getApplicationIcon(mPackageInfo.applicationInfo));
         // Use the hash code of the package name string as a unique request code for
         // PendingIntent.getActivity.
         // To prevent multiple notifications related to different apps all leading to the same
@@ -153,41 +156,59 @@ public class AutoGrantPermissionsNotifier {
         int packageBasedRequestCode = mPackageInfo.packageName.hashCode();
 
         String title = mContext.getString(
-                R.string.auto_granted_location_permission_notification_title);
-        String messageText = mContext.getString(R.string.auto_granted_permission_notification_body,
-                pkgLabel);
-        Notification.Builder b = (new Notification.Builder(mContext,
-                getNotificationChannelId(shouldNotifySilently))).setContentTitle(title)
+                R.string.auto_granted_location_permission_notification_title, pkgLabel);
+        String messageText = Utils.getEnterpriseString(mContext, LOCATION_AUTO_GRANTED_MESSAGE,
+                R.string.auto_granted_permission_notification_body, pkgLabel);
+        Notification.Builder notificationBuilder = (new Notification.Builder(mContext,
+                getNotificationChannelId(shouldNotifySilently)))
+                .setContentTitle(title)
                 .setContentText(messageText)
                 .setStyle(new Notification.BigTextStyle().bigText(messageText).setBigContentTitle(
                         title))
+                .setGroup(ADMIN_AUTO_GRANTED_PERMISSIONS_NOTIFICATION_GROUP_ID)
                 // NOTE: Different icons would be needed for different permissions.
+                .setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
                 .setSmallIcon(R.drawable.ic_pin_drop)
                 .setLargeIcon(pkgIconBmp)
                 .setColor(mContext.getColor(android.R.color.system_notification_accent_color))
                 .setContentIntent(getActivity(mContext, packageBasedRequestCode,
-                            manageAppPermission, FLAG_UPDATE_CURRENT));
+                            manageAppPermission, FLAG_UPDATE_CURRENT | FLAG_IMMUTABLE));
 
         // Add the Settings app name since we masquerade it.
         CharSequence appName = getSettingsAppName();
         if (appName != null) {
             Bundle extras = new Bundle();
             extras.putString(Notification.EXTRA_SUBSTITUTE_APP_NAME, appName.toString());
-            b.addExtras(extras);
+            notificationBuilder.addExtras(extras);
         }
 
-        NotificationManager notificationManager = getSystemServiceSafe(mContext,
-                NotificationManager.class);
         // Cancel previous notifications for the same package to avoid redundant notifications.
         // This code currently only deals with location-related notifications, which would all lead
         // to the same Settings activity for managing location permissions.
         // If ever extended to cover multiple types of notifications, then only multiple
         // notifications of the same group should be canceled.
-        notificationManager.cancel(
+        mNotificationManager.cancel(
                 mPackageInfo.packageName, PERMISSION_GRANTED_BY_ADMIN_NOTIFICATION_ID);
-        notificationManager.notify(mPackageInfo.packageName,
+
+        mNotificationManager.notify(mPackageInfo.packageName,
                 PERMISSION_GRANTED_BY_ADMIN_NOTIFICATION_ID,
-                b.build());
+                notificationBuilder.build());
+
+        // only show the summary notification if it is not already showing. Otherwise, this
+        // breaks the alerting behaviour.
+        if (!isNotificationActive(ADMIN_AUTO_GRANTED_PERMISSIONS_NOTIFICATION_SUMMARY_ID)) {
+            String summaryTitle = mContext.getString(R.string.auto_granted_permissions);
+
+            Notification.Builder summaryNotificationBuilder = new Notification.Builder(mContext,
+                    getNotificationChannelId(shouldNotifySilently))
+                    .setContentTitle(summaryTitle)
+                    .setSmallIcon(R.drawable.ic_pin_drop)
+                    .setGroup(ADMIN_AUTO_GRANTED_PERMISSIONS_NOTIFICATION_GROUP_ID)
+                    .setGroupSummary(true);
+
+            mNotificationManager.notify(ADMIN_AUTO_GRANTED_PERMISSIONS_NOTIFICATION_SUMMARY_ID,
+                    summaryNotificationBuilder.build());
+        }
     }
 
     /**
@@ -226,22 +247,21 @@ public class AutoGrantPermissionsNotifier {
                         AutoGrantPermissionsNotifier.class.getName());
     }
 
-    private @NonNull Bitmap getPackageIcon(@NonNull Drawable pkgIcon) {
-        Bitmap pkgIconBmp = createBitmap(pkgIcon.getIntrinsicWidth(), pkgIcon.getIntrinsicHeight(),
-                ARGB_8888);
-        // Draw the icon so it can be displayed.
-        Canvas canvas = new Canvas(pkgIconBmp);
-        pkgIcon.setBounds(0, 0, pkgIcon.getIntrinsicWidth(), pkgIcon.getIntrinsicHeight());
-        pkgIcon.draw(canvas);
-        return pkgIconBmp;
-    }
-
     private String getNotificationChannelId(boolean shouldNotifySilently) {
         if (shouldNotifySilently) {
             return ADMIN_AUTO_GRANTED_PERMISSIONS_NOTIFICATION_CHANNEL_ID;
         } else {
             return ADMIN_AUTO_GRANTED_PERMISSIONS_ALERTING_NOTIFICATION_CHANNEL_ID;
         }
+    }
+
+    private boolean isNotificationActive(int notificationId) {
+        for (StatusBarNotification notification : mNotificationManager.getActiveNotifications()) {
+            if (notification.getId() == notificationId) {
+                return true;
+            }
+        }
+        return false;
     }
 }
 

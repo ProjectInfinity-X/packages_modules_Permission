@@ -17,6 +17,7 @@
 package com.android.permissioncontroller.permission.ui.handheld;
 
 import static android.Manifest.permission_group.STORAGE;
+import static android.app.Activity.RESULT_OK;
 
 import static com.android.permissioncontroller.Constants.EXTRA_SESSION_ID;
 import static com.android.permissioncontroller.Constants.INVALID_SESSION_ID;
@@ -27,6 +28,7 @@ import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__DENY;
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__DENY_FOREGROUND;
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__GRANT_FINE_LOCATION;
+import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__PHOTOS_SELECTED;
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__REVOKE_FINE_LOCATION;
 import static com.android.permissioncontroller.permission.ui.GrantPermissionsViewHandler.DENIED;
 import static com.android.permissioncontroller.permission.ui.GrantPermissionsViewHandler.DENIED_DO_NOT_ASK_AGAIN;
@@ -38,9 +40,9 @@ import static com.android.permissioncontroller.permission.ui.ManagePermissionsAc
 import static com.android.permissioncontroller.permission.ui.handheld.UtilsKt.pressBack;
 
 import android.app.ActionBar;
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
+import android.app.role.RoleManager;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -69,6 +71,7 @@ import androidx.core.widget.NestedScrollView;
 import androidx.fragment.app.DialogFragment;
 import androidx.lifecycle.ViewModelProvider;
 
+import com.android.modules.utils.build.SdkLevel;
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.permission.data.FullStoragePermissionAppsLiveData.FullStoragePackageState;
 import com.android.permissioncontroller.permission.ui.GrantPermissionsViewHandler;
@@ -77,15 +80,19 @@ import com.android.permissioncontroller.permission.ui.model.AppPermissionViewMod
 import com.android.permissioncontroller.permission.ui.model.AppPermissionViewModel.ButtonType;
 import com.android.permissioncontroller.permission.ui.model.AppPermissionViewModel.ChangeRequest;
 import com.android.permissioncontroller.permission.ui.model.AppPermissionViewModelFactory;
+import com.android.permissioncontroller.permission.ui.v33.AdvancedConfirmDialogArgs;
 import com.android.permissioncontroller.permission.utils.KotlinUtils;
+import com.android.permissioncontroller.permission.utils.Utils;
 import com.android.settingslib.RestrictedLockUtils;
 import com.android.settingslib.RestrictedLockUtils.EnforcedAdmin;
 import com.android.settingslib.widget.ActionBarShadowController;
 
+import kotlin.Pair;
+
 import java.util.Map;
 import java.util.Objects;
-
-import kotlin.Pair;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Show and manage a single permission group for an app.
@@ -96,17 +103,24 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
         implements AppPermissionViewModel.ConfirmDialogShowingFragment {
     private static final String LOG_TAG = "AppPermissionFragment";
     private static final long POST_DELAY_MS = 20;
+    private static final long EDIT_PHOTOS_BUTTON_ANIMATION_LENGTH_MS = 200L;
 
     static final String GRANT_CATEGORY = "grant_category";
 
     private @NonNull AppPermissionViewModel mViewModel;
+    private @NonNull ViewGroup mAppPermissionRationaleContainer;
+    private @NonNull ViewGroup mAppPermissionRationaleContent;
     private @NonNull RadioButton mAllowButton;
     private @NonNull RadioButton mAllowAlwaysButton;
     private @NonNull RadioButton mAllowForegroundButton;
     private @NonNull RadioButton mAskOneTimeButton;
     private @NonNull RadioButton mAskButton;
+    private @NonNull RadioButton mSelectPhotosButton;
     private @NonNull RadioButton mDenyButton;
     private @NonNull RadioButton mDenyForegroundButton;
+    private @NonNull ImageView mEditPhotosButton;
+    private @NonNull View mSelectPhotosLayout;
+    private @NonNull View mEditPhotosDivider;
     private @NonNull View mLocationAccuracy;
     private @NonNull Switch mLocationAccuracySwitch;
     private @NonNull View mDivider;
@@ -118,11 +132,14 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
     private @NonNull UserHandle mUser;
     private boolean mIsStorageGroup;
     private boolean mIsInitialLoad;
+    // This prevents the user from clicking the photo picker button multiple times in succession
+    private boolean mPhotoPickerTriggered;
     private long mSessionId;
 
     private @NonNull String mPackageLabel;
     private @NonNull String mPermGroupLabel;
     private Drawable mPackageIcon;
+    private @NonNull RoleManager mRoleManager;
 
     /**
      * Create a bundle with the arguments needed by this fragment
@@ -198,6 +215,8 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
         if (mIsStorageGroup) {
             mViewModel.getFullStorageStateLiveData().observe(this, this::setSpecialStorageState);
         }
+
+        mRoleManager = Utils.getSystemServiceSafe(getContext(), RoleManager.class);
     }
 
     @Override
@@ -225,19 +244,37 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
         footer2Link.setText(context.getString(R.string.app_permission_footer_permission_apps_link));
         setBottomLinkState(footer2Link, caller, Intent.ACTION_MANAGE_PERMISSION_APPS);
 
+        Set<String> exemptedPackages = Utils.getExemptedPackages(mRoleManager);
+        ImageView footerInfoIcon = root.requireViewById(R.id.app_additional_info_icon);
+        TextView footerInfoText = root.requireViewById(R.id.app_additional_info_text);
+        if (exemptedPackages.contains(mPackageName)) {
+            int additional_info_label = Utils.isStatusBarIndicatorPermission(mPermGroupName)
+                    ? R.string.exempt_mic_camera_info_label : R.string.exempt_info_label;
+            footerInfoText.setText(context.getString(additional_info_label, mPackageLabel));
+            footerInfoIcon.setVisibility(View.VISIBLE);
+            footerInfoText.setVisibility(View.VISIBLE);
+        } else {
+            footerInfoIcon.setVisibility(View.GONE);
+            footerInfoText.setVisibility(View.GONE);
+        }
+
         mAllowButton = root.requireViewById(R.id.allow_radio_button);
         mAllowAlwaysButton = root.requireViewById(R.id.allow_always_radio_button);
         mAllowForegroundButton = root.requireViewById(R.id.allow_foreground_only_radio_button);
         mAskOneTimeButton = root.requireViewById(R.id.ask_one_time_radio_button);
         mAskButton = root.requireViewById(R.id.ask_radio_button);
+        mSelectPhotosButton = root.requireViewById(R.id.select_radio_button);
         mDenyButton = root.requireViewById(R.id.deny_radio_button);
         mDenyForegroundButton = root.requireViewById(R.id.deny_foreground_radio_button);
+
         mDivider = root.requireViewById(R.id.two_target_divider);
         mWidgetFrame = root.requireViewById(R.id.widget_frame);
         mPermissionDetails = root.requireViewById(R.id.permission_details);
         mLocationAccuracy = root.requireViewById(R.id.location_accuracy);
         mLocationAccuracySwitch = root.requireViewById(R.id.location_accuracy_switch);
-
+        mSelectPhotosLayout = root.requireViewById(R.id.radio_select_layout);
+        mEditPhotosButton = root.requireViewById(R.id.edit_selected_button);
+        mEditPhotosDivider = root.requireViewById(R.id.edit_photos_divider);
         mNestedScrollView = root.requireViewById(R.id.nested_scroll_view);
 
         if (mViewModel.getButtonStateLiveData().getValue() != null) {
@@ -251,6 +288,9 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
             mDenyButton.setVisibility(View.GONE);
             mDenyForegroundButton.setVisibility(View.GONE);
             mLocationAccuracy.setVisibility(View.GONE);
+            mSelectPhotosLayout.setVisibility(View.GONE);
+            mEditPhotosDivider.setAlpha(0f);
+            mEditPhotosButton.setAlpha(0f);
         }
 
         if (mViewModel.getFullStorageStateLiveData().isInitialized() && mIsStorageGroup) {
@@ -259,12 +299,38 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
             TextView storageFooter = root.requireViewById(R.id.footer_storage_special_app_access);
             storageFooter.setVisibility(View.GONE);
         }
+        mAppPermissionRationaleContainer =
+                root.requireViewById(R.id.app_permission_rationale_container);
+        mAppPermissionRationaleContent =
+                root.requireViewById(R.id.app_permission_rationale_content);
+        mViewModel.getShowPermissionRationaleLiveData().observe(this, show -> {
+            showPermissionRationaleDialog(Optional.ofNullable(show).orElse(false));
+        });
 
         getActivity().setTitle(
                 getPreferenceManager().getContext().getString(R.string.app_permission_title,
                         mPermGroupLabel));
-
         return root;
+    }
+
+    public void onResume() {
+        super.onResume();
+        // If we're returning to the fragment, photo picker hasn't been triggered
+        mPhotoPickerTriggered = false;
+    }
+
+    private void showPermissionRationaleDialog(boolean showPermissionRationale) {
+        if (!showPermissionRationale) {
+            mAppPermissionRationaleContainer.setVisibility(View.GONE);
+        } else {
+            mAppPermissionRationaleContainer.setVisibility(View.VISIBLE);
+            mAppPermissionRationaleContent.setOnClickListener((v) -> {
+                if (!SdkLevel.isAtLeastU()) {
+                    return;
+                }
+                mViewModel.showPermissionRationaleActivity(getActivity(), mPermGroupName);
+            });
+        }
     }
 
     private void setBottomLinkState(TextView view, String caller, String action) {
@@ -313,7 +379,7 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
     }
 
     private void setRadioButtonsState(Map<ButtonType, ButtonState> states) {
-        if (states == null && mViewModel.getButtonStateLiveData().isInitialized()) {
+        if (states == null && !mViewModel.getButtonStateLiveData().isStale()) {
             pressBack(this);
             Log.w(LOG_TAG, "invalid package " + mPackageName + " or perm group "
                     + mPermGroupName);
@@ -331,7 +397,7 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
         });
         mAllowAlwaysButton.setOnClickListener((v) -> {
             if (mIsStorageGroup) {
-                showConfirmDialog(ChangeRequest.GRANT_All_FILE_ACCESS,
+                showConfirmDialog(ChangeRequest.GRANT_ALL_FILE_ACCESS,
                         R.string.special_file_access_dialog, -1, false);
             } else {
                 mViewModel.requestChange(false, this, this, ChangeRequest.GRANT_BOTH,
@@ -357,8 +423,20 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
                     APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__ASK_EVERY_TIME);
             setResult(DENIED);
         });
+        mSelectPhotosButton.setOnClickListener((v) -> {
+            int buttonPressed =
+                    APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__PHOTOS_SELECTED;
+            mViewModel.requestChange(false, this, this, ChangeRequest.PHOTOS_SELECTED,
+                    buttonPressed);
+        });
+        mEditPhotosButton.setOnClickListener((v) -> {
+            ButtonState selectState = states.get(ButtonType.SELECT_PHOTOS);
+            if (selectState != null && selectState.isChecked() && !mPhotoPickerTriggered) {
+                mPhotoPickerTriggered = true;
+                mViewModel.openPhotoPicker(this);
+            }
+        });
         mDenyButton.setOnClickListener((v) -> {
-
             if (mViewModel.getFullStorageStateLiveData().getValue() != null
                     && !mViewModel.getFullStorageStateLiveData().getValue().isLegacy()) {
                 mViewModel.setAllFilesAccess(false);
@@ -377,8 +455,9 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
                 APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__GRANT_FINE_LOCATION;
         int revokeFineLocation =
                 APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__REVOKE_FINE_LOCATION;
-        mLocationAccuracySwitch.setOnClickListener((v) -> {
-            if (((Switch) v).isChecked()) {
+        mLocationAccuracy.setOnClickListener((v) -> {
+            mLocationAccuracySwitch.performClick();
+            if (mLocationAccuracySwitch.isChecked()) {
                 mViewModel.requestChange(false, this, this, ChangeRequest.GRANT_FINE_LOCATION,
                         grantFineLocation);
             } else {
@@ -394,6 +473,12 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
         setButtonState(mAskButton, states.get(ButtonType.ASK));
         setButtonState(mDenyButton, states.get(ButtonType.DENY));
         setButtonState(mDenyForegroundButton, states.get(ButtonType.DENY_FOREGROUND));
+        setButtonState(mSelectPhotosButton, states.get(ButtonType.SELECT_PHOTOS));
+        if (mSelectPhotosButton.getVisibility() == View.VISIBLE) {
+            mAllowButton.setText(R.string.app_permission_button_always_allow_all);
+        } else {
+            mAllowButton.setText(R.string.app_permission_button_allow);
+        }
 
         ButtonState locationAccuracyState = states.get(ButtonType.LOCATION_ACCURACY);
         if (!locationAccuracyState.isShown()) {
@@ -423,6 +508,21 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
         }
         if (mIsInitialLoad) {
             button.jumpDrawablesToCurrentState();
+        }
+
+        if (button == mSelectPhotosButton) {
+            mSelectPhotosLayout.setVisibility(visible);
+            float endOpacity = state.isChecked() ? 1f : 0f;
+            // On initial load, do not show the fade in/out animation
+            if (mIsInitialLoad) {
+                mEditPhotosDivider.setAlpha(endOpacity);
+                mEditPhotosButton.setAlpha(endOpacity);
+                return;
+            }
+            mEditPhotosButton.animate().alpha(endOpacity)
+                    .setDuration(EDIT_PHOTOS_BUTTON_ANIMATION_LENGTH_MS);
+            mEditPhotosDivider.animate().alpha(endOpacity)
+                    .setDuration(EDIT_PHOTOS_BUTTON_ANIMATION_LENGTH_MS);
         }
     }
 
@@ -463,7 +563,7 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
         Intent intent = new Intent()
                 .putExtra(EXTRA_RESULT_PERMISSION_INTERACTED, mPermGroupName)
                 .putExtra(EXTRA_RESULT_PERMISSION_RESULT, result);
-        getActivity().setResult(Activity.RESULT_OK, intent);
+        getActivity().setResult(RESULT_OK, intent);
     }
 
     private void setDetail(Pair<Integer, Integer> detailResIds) {
@@ -515,7 +615,7 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
     }
 
     /**
-     * Show a dialog that warns the user that she/he is about to revoke permissions that were
+     * Show a dialog that warns the users that they are about to revoke permissions that were
      * granted by default, or that they are about to grant full file access to an app.
      *
      *
@@ -565,9 +665,11 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
         private static int sCode =  APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__ALLOW;
         @Override
         public Dialog onCreateDialog(Bundle savedInstanceState) {
+            // TODO(b/229024576): This code is duplicated, refactor ConfirmDialog for easier
+            // NFF sharing
             AppPermissionFragment fragment = (AppPermissionFragment) getParentFragment();
             boolean isGrantFileAccess = getArguments().getSerializable(CHANGE_REQUEST)
-                    == ChangeRequest.GRANT_All_FILE_ACCESS;
+                    == ChangeRequest.GRANT_ALL_FILE_ACCESS;
             int positiveButtonStringResId = R.string.grant_dialog_button_deny_anyway;
             if (isGrantFileAccess) {
                 positiveButtonStringResId = R.string.grant_dialog_button_allow;
@@ -599,5 +701,29 @@ public class AppPermissionFragment extends SettingsWithLargeHeader
             AppPermissionFragment fragment = (AppPermissionFragment) getParentFragment();
             fragment.setRadioButtonsState(fragment.mViewModel.getButtonStateLiveData().getValue());
         }
+    }
+
+    @Override
+    public void showAdvancedConfirmDialog(AdvancedConfirmDialogArgs args) {
+        AlertDialog.Builder b = new AlertDialog.Builder(getContext())
+                .setIcon(args.getIconId())
+                .setMessage(args.getMessageId())
+                .setOnCancelListener((DialogInterface dialog) -> {
+                    setRadioButtonsState(mViewModel.getButtonStateLiveData().getValue());
+                })
+                .setNegativeButton(args.getNegativeButtonTextId(),
+                        (DialogInterface dialog, int which) -> {
+                            setRadioButtonsState(mViewModel.getButtonStateLiveData().getValue());
+                        })
+                .setPositiveButton(args.getPositiveButtonTextId(),
+                        (DialogInterface dialog, int which) -> {
+                            mViewModel.requestChange(args.getSetOneTime(),
+                                    AppPermissionFragment.this, AppPermissionFragment.this,
+                                    args.getChangeRequest(), args.getButtonClicked());
+                        });
+        if (args.getTitleId() != 0) {
+            b.setTitle(args.getTitleId());
+        }
+        b.show();
     }
 }

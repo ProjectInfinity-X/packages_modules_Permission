@@ -16,6 +16,8 @@
 
 package com.android.permissioncontroller.permission.ui.television;
 
+import static android.Manifest.permission_group.NOTIFICATIONS;
+
 import android.Manifest;
 import android.app.ActionBar;
 import android.app.AlertDialog;
@@ -46,6 +48,7 @@ import androidx.preference.SwitchPreference;
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.permission.model.AppPermissionGroup;
 import com.android.permissioncontroller.permission.model.AppPermissions;
+import com.android.permissioncontroller.permission.utils.PermissionMapping;
 import com.android.permissioncontroller.permission.utils.Utils;
 
 import java.util.ArrayList;
@@ -167,7 +170,13 @@ public final class AllAppPermissionsFragment extends SettingsWithHeader {
                     continue;
                 }
 
-                PermissionGroupInfo group = getGroup(Utils.getGroupOfPermission(perm), pm);
+                PermissionGroupInfo group =
+                        getGroup(PermissionMapping.getGroupOfPermission(perm), pm);
+                if (group != null && group.name.equals(NOTIFICATIONS)) {
+                    // Skip notification group on TV
+                    continue;
+                }
+
                 if ((perm.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE)
                         == PermissionInfo.PROTECTION_DANGEROUS) {
                     PreferenceGroup pref = findOrCreate(group != null ? group : perm, pm, prefs);
@@ -193,9 +202,9 @@ public final class AllAppPermissionsFragment extends SettingsWithHeader {
                     return 1;
                 } else if (rKey.equals(KEY_OTHER)) {
                     return -1;
-                } else if (Utils.isModernPermissionGroup(lKey)
-                        != Utils.isModernPermissionGroup(rKey)) {
-                    return Utils.isModernPermissionGroup(lKey) ? -1 : 1;
+                } else if (PermissionMapping.isPlatformPermissionGroup(lKey)
+                        != PermissionMapping.isPlatformPermissionGroup(rKey)) {
+                    return PermissionMapping.isPlatformPermissionGroup(lKey) ? -1 : 1;
                 }
                 return lhs.getTitle().toString().compareTo(rhs.getTitle().toString());
             }
@@ -219,7 +228,7 @@ public final class AllAppPermissionsFragment extends SettingsWithHeader {
         if (pref == null) {
             pref = new PreferenceCategory(getActivity());
             pref.setKey(group.name);
-            pref.setLayoutResource(R.layout.preference_category_material);
+            pref.setLayoutResource(androidx.preference.R.layout.preference_category_material);
             pref.setTitle(group.loadLabel(pm));
             prefs.add(pref);
             getPreferenceScreen().addPreference(pref);

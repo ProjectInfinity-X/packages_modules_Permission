@@ -16,6 +16,7 @@
 
 package com.android.permissioncontroller.role.ui;
 
+import android.app.admin.DevicePolicyResources.Strings.DefaultAppSettings;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -39,8 +40,9 @@ import androidx.preference.PreferenceScreen;
 
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.permission.utils.Utils;
-import com.android.permissioncontroller.role.model.Role;
-import com.android.permissioncontroller.role.model.Roles;
+import com.android.permissioncontroller.role.utils.RoleUiBehaviorUtils;
+import com.android.role.controller.model.Role;
+import com.android.role.controller.model.Roles;
 
 import java.util.List;
 import java.util.Objects;
@@ -132,7 +134,9 @@ public class DefaultAppListChildFragment<PF extends PreferenceFragmentCompat
             if (workPreferenceCategory == null) {
                 workPreferenceCategory = new PreferenceCategory(context);
                 workPreferenceCategory.setKey(PREFERENCE_KEY_WORK_CATEGORY);
-                workPreferenceCategory.setTitle(R.string.default_apps_for_work);
+                workPreferenceCategory.setTitle(Utils.getEnterpriseString(context,
+                        DefaultAppSettings.WORK_PROFILE_DEFAULT_APPS_TITLE,
+                        R.string.default_apps_for_work));
             }
             preferenceScreen.addPreference(workPreferenceCategory);
             addPreferences(workPreferenceCategory, workRoleItems, oldWorkPreferences, this,
@@ -163,16 +167,19 @@ public class DefaultAppListChildFragment<PF extends PreferenceFragmentCompat
             RoleItem roleItem = roleItems.get(i);
 
             Role role = roleItem.getRole();
-            TwoTargetPreference preference = (TwoTargetPreference) oldPreferences.get(
-                    role.getName());
-            if (preference == null) {
-                preference = preferenceFragment.createPreference(context);
+            RolePreference rolePreference = (RolePreference) oldPreferences.get(role.getName());
+            Preference preference;
+            if (rolePreference == null) {
+                rolePreference = preferenceFragment.createPreference();
+                preference = rolePreference.asPreference();
                 preference.setKey(role.getName());
                 preference.setIconSpaceReserved(true);
                 preference.setTitle(role.getShortLabelResource());
                 preference.setPersistent(false);
                 preference.setOnPreferenceClickListener(listener);
                 preference.getExtras().putParcelable(Intent.EXTRA_USER, user);
+            } else {
+                preference = rolePreference.asPreference();
             }
 
             List<ApplicationInfo> holderApplicationInfos = roleItem.getHolderApplicationInfos();
@@ -184,8 +191,7 @@ public class DefaultAppListChildFragment<PF extends PreferenceFragmentCompat
                 preference.setIcon(Utils.getBadgedIcon(context, holderApplicationInfo));
                 preference.setSummary(Utils.getAppLabel(holderApplicationInfo, context));
             }
-            role.preparePreferenceAsUser(preference, user, context);
-
+            RoleUiBehaviorUtils.preparePreferenceAsUser(role, rolePreference, user, context);
             preferenceGroup.addPreference(preference);
         }
     }
@@ -196,7 +202,7 @@ public class DefaultAppListChildFragment<PF extends PreferenceFragmentCompat
         Context context = requireContext();
         Role role = Roles.get(context).get(roleName);
         UserHandle user = preference.getExtras().getParcelable(Intent.EXTRA_USER);
-        Intent intent = role.getManageIntentAsUser(user, context);
+        Intent intent = RoleUiBehaviorUtils.getManageIntentAsUser(role, user, context);
         if (intent == null) {
             intent = DefaultAppActivity.createIntent(roleName, user, context);
         }
@@ -277,12 +283,10 @@ public class DefaultAppListChildFragment<PF extends PreferenceFragmentCompat
         /**
          * Create a new preference for a default app.
          *
-         * @param context the {@code Context} to use when creating the preference.
-         *
          * @return a new preference for a default app
          */
         @NonNull
-        TwoTargetPreference createPreference(@NonNull Context context);
+        RolePreference createPreference();
 
         /**
          * Callback when changes have been made to the {@link PreferenceScreen} of the parent

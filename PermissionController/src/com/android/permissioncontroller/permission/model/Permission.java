@@ -169,6 +169,18 @@ public final class Permission {
     }
 
     /**
+     * Sets the REVOKE_WHEN_REQUESTED permission flag
+     * @param revokeWhenRequested true to set the flag, false to unset it
+     */
+    public void setRevokeWhenRequested(boolean revokeWhenRequested) {
+        if (revokeWhenRequested) {
+            mFlags |= PackageManager.FLAG_PERMISSION_REVOKE_WHEN_REQUESTED;
+        } else {
+            mFlags &= ~PackageManager.FLAG_PERMISSION_REVOKE_WHEN_REQUESTED;
+        }
+    }
+
+    /**
      * Sets the one-time permission flag
      * @param oneTime true to set the flag, false to unset it
      */
@@ -177,6 +189,22 @@ public final class Permission {
             mFlags |= PackageManager.FLAG_PERMISSION_ONE_TIME;
         } else {
             mFlags &= ~PackageManager.FLAG_PERMISSION_ONE_TIME;
+        }
+    }
+
+    public boolean isSelectedLocationAccuracy() {
+        return (mFlags & PackageManager.FLAG_PERMISSION_SELECTED_LOCATION_ACCURACY) != 0;
+    }
+
+   /**
+     * Sets the selected-location-accuracy permission flag
+     * @param selectedLocationAccuracy true to set the flag, false to unset it
+     */
+    public void setSelectedLocationAccuracy(boolean selectedLocationAccuracy) {
+        if (selectedLocationAccuracy) {
+            mFlags |= PackageManager.FLAG_PERMISSION_SELECTED_LOCATION_ACCURACY;
+        } else {
+            mFlags &= ~PackageManager.FLAG_PERMISSION_SELECTED_LOCATION_ACCURACY;
         }
     }
 

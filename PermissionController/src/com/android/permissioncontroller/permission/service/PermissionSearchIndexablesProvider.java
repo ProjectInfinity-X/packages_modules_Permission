@@ -21,6 +21,7 @@ import static android.provider.SearchIndexablesContract.RawData.COLUMN_INTENT_AC
 import static android.provider.SearchIndexablesContract.RawData.COLUMN_KEY;
 import static android.provider.SearchIndexablesContract.RawData.COLUMN_KEYWORDS;
 import static android.provider.SearchIndexablesContract.RawData.COLUMN_RANK;
+import static android.provider.SearchIndexablesContract.RawData.COLUMN_SCREEN_TITLE;
 import static android.provider.SearchIndexablesContract.RawData.COLUMN_TITLE;
 
 import android.content.Context;
@@ -30,7 +31,7 @@ import android.database.MatrixCursor;
 import android.util.Log;
 
 import com.android.permissioncontroller.R;
-import com.android.permissioncontroller.permission.utils.Utils;
+import com.android.permissioncontroller.permission.utils.PermissionMapping;
 
 import java.util.List;
 
@@ -48,7 +49,7 @@ public class PermissionSearchIndexablesProvider extends BaseSearchIndexablesProv
         Context context = getContext();
         PackageManager pm = context.getPackageManager();
 
-        List<String> permissionGroupNames = Utils.getPlatformPermissionGroups();
+        List<String> permissionGroupNames = PermissionMapping.getPlatformPermissionGroups();
         MatrixCursor cursor = new MatrixCursor(INDEXABLES_RAW_COLUMNS);
 
         int numPermissionGroups = permissionGroupNames.size();
@@ -62,7 +63,8 @@ public class PermissionSearchIndexablesProvider extends BaseSearchIndexablesProv
                     .add(COLUMN_KEYWORDS, label + ", " + context.getString(
                             R.string.permission_search_keyword))
                     .add(COLUMN_KEY, createRawDataKey(groupName, context))
-                    .add(COLUMN_INTENT_ACTION, ACTION_MANAGE_PERMISSION_APPS);
+                    .add(COLUMN_INTENT_ACTION, ACTION_MANAGE_PERMISSION_APPS)
+                    .add(COLUMN_SCREEN_TITLE, context.getString(R.string.app_permission_manager));
         }
 
         return cursor;

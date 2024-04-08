@@ -22,20 +22,27 @@ import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSIONS_FRAGMENT_VIEWED__CATEGORY__ALLOWED;
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSIONS_FRAGMENT_VIEWED__CATEGORY__ALLOWED_FOREGROUND;
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSIONS_FRAGMENT_VIEWED__CATEGORY__DENIED;
+import static com.android.permissioncontroller.hibernation.HibernationPolicyKt.isHibernationEnabled;
+import static com.android.permissioncontroller.permission.ui.Category.STORAGE_FOOTER;
 import static com.android.permissioncontroller.permission.ui.handheld.UtilsKt.pressBack;
+
+import static java.util.concurrent.TimeUnit.DAYS;
 
 import android.app.ActionBar;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
 import android.icu.text.ListFormatter;
-import android.location.LocationManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.util.Log;
@@ -48,6 +55,7 @@ import android.view.ViewGroup;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.StringRes;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.preference.Preference;
@@ -55,20 +63,26 @@ import androidx.preference.PreferenceCategory;
 import androidx.preference.PreferenceScreen;
 import androidx.preference.SwitchPreference;
 
+import com.android.modules.utils.build.SdkLevel;
 import com.android.permissioncontroller.PermissionControllerStatsLog;
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.permission.model.livedatatypes.HibernationSettingState;
+import com.android.permissioncontroller.permission.model.v31.AppPermissionUsage;
+import com.android.permissioncontroller.permission.model.v31.PermissionUsages;
 import com.android.permissioncontroller.permission.ui.Category;
 import com.android.permissioncontroller.permission.ui.model.AppPermissionGroupsViewModel;
 import com.android.permissioncontroller.permission.ui.model.AppPermissionGroupsViewModel.GroupUiInfo;
-import com.android.permissioncontroller.permission.ui.model.AppPermissionGroupsViewModel.PermSubtitle;
 import com.android.permissioncontroller.permission.ui.model.AppPermissionGroupsViewModelFactory;
 import com.android.permissioncontroller.permission.utils.KotlinUtils;
+import com.android.permissioncontroller.permission.utils.StringUtils;
 import com.android.permissioncontroller.permission.utils.Utils;
 import com.android.settingslib.HelpUtils;
+import com.android.settingslib.widget.FooterPreference;
 
 import java.text.Collator;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -79,7 +93,8 @@ import java.util.Random;
  *
  * <p>Shows the list of permission groups the app has requested at one permission for.
  */
-public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
+public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader implements
+        PermissionUsages.PermissionsUsagesChangeCallback {
 
     private static final String LOG_TAG = AppPermissionGroupsFragment.class.getSimpleName();
     private static final String IS_SYSTEM_PERMS_SCREEN = "_is_system_screen";
@@ -97,6 +112,8 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
     private boolean mIsFirstLoad;
     private String mPackageName;
     private UserHandle mUser;
+    private PermissionUsages mPermissionUsages;
+    private List<AppPermissionUsage> mAppPermissionUsages = new ArrayList<>();
 
     private Collator mCollator;
 
@@ -160,9 +177,42 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
         mCollator = Collator.getInstance(
                 getContext().getResources().getConfiguration().getLocales().get(0));
 
-        if (mViewModel.getPackagePermGroupsLiveData().getValue() != null) {
-            updatePreferences(mViewModel.getPackagePermGroupsLiveData().getValue());
+        // If the build type is below S, the app ops for permission usage can't be found. Thus, we
+        // shouldn't load permission usages, for them.
+        if (SdkLevel.isAtLeastS()) {
+            Context context = getPreferenceManager().getContext();
+            mPermissionUsages = new PermissionUsages(context);
+
+            long aggregateDataFilterBeginDays = KotlinUtils.INSTANCE.is7DayToggleEnabled()
+                    ? AppPermissionGroupsViewModel.AGGREGATE_DATA_FILTER_BEGIN_DAYS_7 :
+                    AppPermissionGroupsViewModel.AGGREGATE_DATA_FILTER_BEGIN_DAYS_1;
+
+            long filterTimeBeginMillis = Math.max(System.currentTimeMillis()
+                            - DAYS.toMillis(aggregateDataFilterBeginDays),
+                    Instant.EPOCH.toEpochMilli());
+            mPermissionUsages.load(null, null, filterTimeBeginMillis, Long.MAX_VALUE,
+                    PermissionUsages.USAGE_FLAG_LAST, getActivity().getLoaderManager(),
+                    false, false, this, false);
+            // TODO 206455664: remove once issue is identified
+            new Handler(Looper.getMainLooper()).postDelayed(this::printState, 3000);
         }
+
+        updatePreferences(mViewModel.getPackagePermGroupsLiveData().getValue());
+
+    }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    private void printState() {
+        int numPrefs =
+                getPreferenceScreen() != null ? getPreferenceScreen().getPreferenceCount() : -1;
+        if (numPrefs > 0) {
+            return;
+        }
+
+        Log.i(LOG_TAG, "number of prefs: " + numPrefs);
+        Log.i(LOG_TAG, "Has created screen: " + (getPreferenceScreen() != null));
+        Log.i(LOG_TAG, "Has usages: " + (!mPermissionUsages.getUsages().isEmpty()));
+        mViewModel.logLiveDataState();
     }
 
     @Override
@@ -170,6 +220,21 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
             Bundle savedInstanceState) {
         getActivity().setTitle(R.string.app_permissions);
         return super.onCreateView(inflater, container, savedInstanceState);
+    }
+
+    @Override
+    @RequiresApi(Build.VERSION_CODES.S)
+    public void onPermissionUsagesChanged() {
+        if (mPermissionUsages.getUsages().isEmpty()) {
+            return;
+        }
+        if (getContext() == null) {
+            // Async result has come in after our context is gone.
+            return;
+        }
+
+        mAppPermissionUsages = new ArrayList<>(mPermissionUsages.getUsages());
+        updatePreferences(mViewModel.getPackagePermGroupsLiveData().getValue());
     }
 
     @Override
@@ -194,8 +259,10 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
         super.onCreateOptionsMenu(menu, inflater);
         if (mIsSystemPermsScreen) {
             menu.add(Menu.NONE, MENU_ALL_PERMS, Menu.NONE, R.string.all_permissions);
-            HelpUtils.prepareHelpMenuItem(getActivity(), menu, R.string.help_app_permissions,
-                    getClass().getName());
+            if (!SdkLevel.isAtLeastS()) {
+                HelpUtils.prepareHelpMenuItem(getActivity(), menu, R.string.help_app_permissions,
+                        getClass().getName());
+            }
         }
     }
 
@@ -224,14 +291,8 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
     }
 
     private void updatePreferences(Map<Category, List<GroupUiInfo>> groupMap) {
-        createPreferenceScreenIfNeeded();
-
-        Context context = getPreferenceManager().getContext();
-        if (context == null) {
-            return;
-        }
-
-        if (groupMap == null && mViewModel.getPackagePermGroupsLiveData().isInitialized()) {
+        if (groupMap == null && !mViewModel.getPackagePermGroupsLiveData().isStale()) {
+            // null because explicitly set to null
             Toast.makeText(
                     getActivity(), R.string.app_not_found_dlg_title, Toast.LENGTH_LONG).show();
             Log.w(LOG_TAG, "invalid package " + mPackageName);
@@ -239,9 +300,27 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
             pressBack(this);
 
             return;
+        } else if (groupMap == null) {
+            // null because uninitialized
+            return;
         }
 
+        createPreferenceScreenIfNeeded();
+
+        Context context = getPreferenceManager().getContext();
+        if (context == null) {
+            return;
+        }
+
+
+        Map<String, Long> groupUsageLastAccessTime = new HashMap<>();
+        mViewModel.extractGroupUsageLastAccessTime(groupUsageLastAccessTime, mAppPermissionUsages,
+                mPackageName);
+
         findPreference(Category.ALLOWED_FOREGROUND.getCategoryName()).setVisible(false);
+
+        // Hide storage footer category
+        findPreference(STORAGE_FOOTER.getCategoryName()).setVisible(false);
 
         long sessionId = getArguments().getLong(EXTRA_SESSION_ID, INVALID_SESSION_ID);
 
@@ -273,43 +352,37 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
                 preference.setTitle(KotlinUtils.INSTANCE.getPermGroupLabel(context, groupName));
                 preference.setIcon(KotlinUtils.INSTANCE.getPermGroupIcon(context, groupName));
                 preference.setKey(groupName);
-                switch (groupInfo.getSubtitle()) {
-                    case FOREGROUND_ONLY:
-                        preference.setSummary(R.string.permission_subtitle_only_in_foreground);
-                        break;
-                    case MEDIA_ONLY:
-                        preference.setSummary(R.string.permission_subtitle_media_only);
-                        break;
-                    case ALL_FILES:
-                        preference.setSummary(R.string.permission_subtitle_all_files);
-                        break;
+                String summary = mViewModel.getPreferenceSummary(groupInfo, context,
+                        groupUsageLastAccessTime.get(groupName));
+                if (!summary.isEmpty()) {
+                    preference.setSummary(summary);
                 }
-                if (groupInfo.getSubtitle() == PermSubtitle.FOREGROUND_ONLY) {
-                    preference.setSummary(R.string.permission_subtitle_only_in_foreground);
-                }
-                // Add an info icon if the package is a location provider
-                LocationManager locationManager = context.getSystemService(LocationManager.class);
-                if (locationManager != null && locationManager.isProviderPackage(mPackageName)) {
-                    Intent sendIntent = new Intent();
-                    sendIntent.setAction(Intent.ACTION_VIEW_PERMISSION_USAGE);
-                    sendIntent.setPackage(mPackageName);
-                    sendIntent.putExtra(Intent.EXTRA_PERMISSION_GROUP_NAME, groupName);
-
-                    PackageManager pm = getActivity().getPackageManager();
-                    ActivityInfo activityInfo = sendIntent.resolveActivityInfo(pm, 0);
-                    if (activityInfo != null && Objects.equals(activityInfo.permission,
-                            android.Manifest.permission.START_VIEW_PERMISSION_USAGE)) {
-                        preference.setRightIcon(
-                                context.getDrawable(R.drawable.ic_info_outline),
-                                v -> {
-                                    try {
-                                        startActivity(sendIntent);
-                                    } catch (ActivityNotFoundException e) {
-                                        Log.e(LOG_TAG, "No activity found for viewing permission "
-                                                + "usage.");
-                                    }
-                                });
-                    }
+                // Add an info icon if the package handles ACTION_VIEW_PERMISSION_USAGE.
+                PackageManager packageManager = requireActivity().getPackageManager();
+                Intent viewUsageIntent = new Intent()
+                        .setPackage(mPackageName)
+                        .setAction(Intent.ACTION_VIEW_PERMISSION_USAGE)
+                        .putExtra(Intent.EXTRA_PERMISSION_GROUP_NAME, groupName);
+                ResolveInfo resolveInfo = packageManager.resolveActivity(viewUsageIntent,
+                        PackageManager.MATCH_INSTANT);
+                if (resolveInfo != null && resolveInfo.activityInfo != null && Objects.equals(
+                        resolveInfo.activityInfo.permission,
+                        android.Manifest.permission.START_VIEW_PERMISSION_USAGE)) {
+                    // Make the intent explicit to not require CATEGORY_DEFAULT.
+                    viewUsageIntent.setComponent(new ComponentName(
+                            resolveInfo.activityInfo.packageName, resolveInfo.activityInfo.name));
+                    preference.setRightIcon(
+                            context.getDrawable(R.drawable.ic_info_outline),
+                            context.getString(R.string.learn_more_content_description,
+                                    KotlinUtils.INSTANCE.getPermGroupLabel(context, groupName)),
+                            v -> {
+                                try {
+                                    startActivity(viewUsageIntent);
+                                } catch (ActivityNotFoundException e) {
+                                    Log.e(LOG_TAG, "No activity found for viewing permission "
+                                            + "usage.");
+                                }
+                            });
                 }
                 if (groupInfo.isSystem() == mIsSystemPermsScreen) {
                     category.addPreference(preference);
@@ -354,20 +427,38 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
             mViewModel.setAutoRevoke(autoRevokeSwitch.isChecked());
             return true;
         });
-        autoRevokeSwitch.setTitle(R.string.auto_revoke_label);
+
+        int switchTitleId;
+        if (isHibernationEnabled()) {
+            if (SdkLevel.isAtLeastT()) {
+                switchTitleId = R.string.unused_apps_label_v2;
+                autoRevokeSwitch.setSummary(R.string.unused_apps_summary);
+            } else {
+                switchTitleId = R.string.unused_apps_label;
+            }
+        } else {
+            switchTitleId = R.string.auto_revoke_label;
+        }
+        autoRevokeSwitch.setTitle(switchTitleId);
         autoRevokeSwitch.setKey(AUTO_REVOKE_SWITCH_KEY);
         autoRevokeCategory.addPreference(autoRevokeSwitch);
 
-        Preference autoRevokeSummary = new Preference(context);
+        Preference autoRevokeSummary = SdkLevel.isAtLeastS() ? new FooterPreference(context)
+                : new Preference(context);
         autoRevokeSummary.setIcon(Utils.applyTint(getActivity(), R.drawable.ic_info_outline,
                 android.R.attr.colorControlNormal));
         autoRevokeSummary.setKey(AUTO_REVOKE_SUMMARY_KEY);
+        if (isHibernationEnabled()) {
+            autoRevokeCategory.setTitle(
+                    SdkLevel.isAtLeastT() ? R.string.unused_apps_category_title
+                            : R.string.unused_apps);
+        }
         autoRevokeCategory.addPreference(autoRevokeSummary);
     }
 
     private void setAutoRevokeToggleState(HibernationSettingState state) {
         if (state == null || !mViewModel.getPackagePermGroupsLiveData().isInitialized()
-                || getListView() == null || getView() == null) {
+                || getPreferenceScreen() == null || getListView() == null || getView() == null) {
             return;
         }
 
@@ -375,19 +466,11 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
                 .findPreference(AUTO_REVOKE_CATEGORY_KEY);
         SwitchPreference autoRevokeSwitch = autoRevokeCategory.findPreference(
                 AUTO_REVOKE_SWITCH_KEY);
-        Preference autoRevokeSummary = autoRevokeCategory.findPreference(AUTO_REVOKE_SUMMARY_KEY);
+        Preference autoRevokeSummary = autoRevokeCategory.findPreference(
+                AUTO_REVOKE_SUMMARY_KEY);
 
-        if (!state.isEnabledGlobal()) {
-            autoRevokeCategory.setVisible(false);
-            autoRevokeSwitch.setVisible(false);
-            autoRevokeSummary.setVisible(false);
-            return;
-        }
-        autoRevokeCategory.setVisible(true);
-        autoRevokeSwitch.setVisible(true);
-        autoRevokeSummary.setVisible(true);
-        autoRevokeSwitch.setEnabled(state.getShouldAllowUserToggle());
-        autoRevokeSwitch.setChecked(state.isEnabledForApp());
+        autoRevokeSwitch.setChecked(state.isEligibleForHibernation());
+        autoRevokeSwitch.setEnabled(!state.isExemptBySystem());
 
         List<String> groupLabels = new ArrayList<>();
         for (String groupName : state.getRevocableGroupNames()) {
@@ -430,8 +513,8 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
                     mPackageName, mUser, getArguments().getLong(EXTRA_SESSION_ID), false));
             return true;
         });
-        extraPerms.setSummary(getResources().getQuantityString(
-                R.plurals.additional_permissions_more, count, count));
+        extraPerms.setSummary(StringUtils.getIcuPluralsString(getContext(),
+                R.string.additional_permissions_more, count));
         return extraPerms;
     }
 
@@ -501,7 +584,7 @@ public final class AppPermissionGroupsFragment extends SettingsWithLargeHeader {
         }
         PermissionControllerStatsLog.write(APP_PERMISSIONS_FRAGMENT_VIEWED, sessionId, viewId,
                 permissionGroupName, uid, mPackageName, category);
-        Log.v(LOG_TAG, "AppPermissionFragment view logged with sessionId=" + sessionId + " viewId="
+        Log.i(LOG_TAG, "AppPermissionFragment view logged with sessionId=" + sessionId + " viewId="
                 + viewId + " permissionGroupName=" + permissionGroupName + " uid="
                 + uid + " packageName="
                 + mPackageName + " category=" + category);

@@ -31,6 +31,7 @@ import android.widget.TextView;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.android.modules.utils.build.SdkLevel;
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.permission.utils.Utils;
 import com.android.settingslib.widget.ActionBarShadowController;
@@ -65,7 +66,9 @@ public abstract class PermissionsFrameFragment extends PreferenceFragmentCompat 
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         super.onCreateOptionsMenu(menu, inflater);
 
-        Utils.prepareSearchMenuItem(menu, requireContext());
+        if (!SdkLevel.isAtLeastS()) {
+            Utils.prepareSearchMenuItem(menu, requireContext());
+        }
     }
 
     @Override
@@ -83,9 +86,11 @@ public abstract class PermissionsFrameFragment extends PreferenceFragmentCompat 
         mPreferencesContainer = (ViewGroup) super.onCreateView(
                 inflater, mPrefsView, savedInstanceState);
         setLoading(mIsLoading, false, true /* force */);
-        mPrefsView.addView(mPreferencesContainer, 0);
-        mProgressHeader = rootView.requireViewById(R.id.progress_bar_animation);
-        mProgressView = rootView.requireViewById(R.id.progress_bar_background);
+        mPrefsView.addView(mPreferencesContainer);
+        mProgressHeader = rootView.requireViewById(
+                com.android.settingslib.widget.progressbar.R.id.progress_bar_animation);
+        mProgressView = rootView.requireViewById(
+                com.android.settingslib.widget.progressbar.R.id.progress_bar_background);
         setProgressBarVisible(false);
         getListView().setFocusable(false);
         return rootView;
@@ -185,6 +190,11 @@ public abstract class PermissionsFrameFragment extends PreferenceFragmentCompat 
     }
 
     private void setViewShown(final View view, boolean shown, boolean animate) {
+        // Clear out previous animation listeners.
+        if (view.getAnimation() != null) {
+            view.getAnimation().setAnimationListener(null);
+        }
+        view.clearAnimation();
         if (animate) {
             Animation animation = AnimationUtils.loadAnimation(getContext(),
                     shown ? android.R.anim.fade_in : android.R.anim.fade_out);
@@ -208,7 +218,6 @@ public abstract class PermissionsFrameFragment extends PreferenceFragmentCompat 
             }
             view.startAnimation(animation);
         } else {
-            view.clearAnimation();
             view.setVisibility(shown ? View.VISIBLE : View.INVISIBLE);
         }
     }

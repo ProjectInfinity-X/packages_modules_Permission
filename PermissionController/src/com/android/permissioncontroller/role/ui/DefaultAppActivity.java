@@ -22,24 +22,23 @@ import android.os.Bundle;
 import android.os.Process;
 import android.os.UserHandle;
 import android.util.Log;
-import android.view.WindowManager;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
-import androidx.fragment.app.FragmentActivity;
 
 import com.android.permissioncontroller.DeviceUtils;
 import com.android.permissioncontroller.R;
-import com.android.permissioncontroller.role.model.Role;
-import com.android.permissioncontroller.role.model.Roles;
 import com.android.permissioncontroller.role.ui.auto.AutoDefaultAppFragment;
 import com.android.permissioncontroller.role.ui.handheld.HandheldDefaultAppFragment;
+import com.android.permissioncontroller.role.ui.wear.WearDefaultAppFragment;
+import com.android.role.controller.model.Role;
+import com.android.role.controller.model.Roles;
 
 /**
  * Activity for a default app.
  */
-public class DefaultAppActivity extends FragmentActivity {
+public class DefaultAppActivity extends SettingsActivity {
 
     private static final String LOG_TAG = DefaultAppActivity.class.getSimpleName();
 
@@ -69,9 +68,6 @@ public class DefaultAppActivity extends FragmentActivity {
         }
         super.onCreate(savedInstanceState);
 
-        getWindow().addSystemFlags(
-                WindowManager.LayoutParams.SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAY_WINDOWS);
-
         Intent intent = getIntent();
         String roleName = intent.getStringExtra(Intent.EXTRA_ROLE_NAME);
         UserHandle user = intent.getParcelableExtra(Intent.EXTRA_USER);
@@ -91,6 +87,7 @@ public class DefaultAppActivity extends FragmentActivity {
             finish();
             return;
         }
+
         if (!role.isVisibleAsUser(user, this)) {
             Log.e(LOG_TAG, "Role is invisible: " + roleName);
             finish();
@@ -101,6 +98,8 @@ public class DefaultAppActivity extends FragmentActivity {
             Fragment fragment;
             if (DeviceUtils.isAuto(this)) {
                 fragment = AutoDefaultAppFragment.newInstance(roleName, user);
+            } else if (DeviceUtils.isWear(this)) {
+                fragment = WearDefaultAppFragment.Companion.newInstance(roleName, user);
             } else {
                 fragment = HandheldDefaultAppFragment.newInstance(roleName, user);
             }

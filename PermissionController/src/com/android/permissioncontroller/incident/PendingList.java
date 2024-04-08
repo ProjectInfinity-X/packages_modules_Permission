@@ -40,7 +40,7 @@ import java.util.Set;
 /**
  * Represents the current list of pending records.
  */
-class PendingList {
+public class PendingList {
     private static final String TAG = "PermissionController.incident";
 
     /**
@@ -244,13 +244,13 @@ class PendingList {
 
                 // Intent for the confirmation dialog.
                 final PendingIntent dialog = PendingIntent.getActivity(mContext, 0,
-                        newDialogIntent(rec), 0);
+                        newDialogIntent(rec), PendingIntent.FLAG_IMMUTABLE);
 
                 // Intent for the approval and denial.
                 final PendingIntent deny = PendingIntent.getBroadcast(mContext, 0,
                         new Intent(ApprovalReceiver.ACTION_DENY, rec.report.getUri(),
                             mContext, ApprovalReceiver.class),
-                        0);
+                        PendingIntent.FLAG_IMMUTABLE);
 
                 // Construct the notification
                 final Notification notification = new Notification.Builder(mContext)
@@ -270,6 +270,7 @@ class PendingList {
                         .setColor(mContext.getColor(
                                     android.R.color.system_notification_accent_color))
                         .extend(new Notification.TvExtender())
+                        .setLocalOnly(true)
                         .build();
 
                 // Show the notification
@@ -296,6 +297,7 @@ class PendingList {
         /**
          * Get the sort key for the order of our notifications.
          */
+        @SuppressWarnings("JavaUtilDate")
         private String getSortKey(long timestamp) {
             return sDateFormatter.format(new Date(timestamp));
         }

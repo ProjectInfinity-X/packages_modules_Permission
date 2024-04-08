@@ -16,6 +16,7 @@
 
 package com.android.permissioncontroller.permission.ui.television;
 
+import static android.Manifest.permission_group.NOTIFICATIONS;
 import static android.Manifest.permission_group.STORAGE;
 
 import static com.android.permissioncontroller.Constants.EXTRA_SESSION_ID;
@@ -33,7 +34,6 @@ import static com.android.permissioncontroller.permission.ui.GrantPermissionsVie
 import static com.android.permissioncontroller.permission.ui.ManagePermissionsActivity.EXTRA_CALLER_NAME;
 import static com.android.permissioncontroller.permission.ui.ManagePermissionsActivity.EXTRA_RESULT_PERMISSION_INTERACTED;
 import static com.android.permissioncontroller.permission.ui.ManagePermissionsActivity.EXTRA_RESULT_PERMISSION_RESULT;
-import static com.android.permissioncontroller.permission.ui.handheld.UtilsKt.pressBack;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -63,6 +63,7 @@ import androidx.preference.PreferenceScreen;
 import androidx.preference.PreferenceViewHolder;
 
 import com.android.permissioncontroller.R;
+import com.android.permissioncontroller.permission.data.FullStoragePermissionAppsLiveData.FullStoragePackageState;
 import com.android.permissioncontroller.permission.model.AppPermissionGroup;
 import com.android.permissioncontroller.permission.model.AppPermissions;
 import com.android.permissioncontroller.permission.ui.GrantPermissionsViewHandler;
@@ -71,6 +72,7 @@ import com.android.permissioncontroller.permission.ui.model.AppPermissionViewMod
 import com.android.permissioncontroller.permission.ui.model.AppPermissionViewModel.ButtonType;
 import com.android.permissioncontroller.permission.ui.model.AppPermissionViewModel.ChangeRequest;
 import com.android.permissioncontroller.permission.ui.model.AppPermissionViewModelFactory;
+import com.android.permissioncontroller.permission.ui.v33.AdvancedConfirmDialogArgs;
 import com.android.permissioncontroller.permission.utils.KotlinUtils;
 import com.android.permissioncontroller.permission.utils.Utils;
 
@@ -160,6 +162,12 @@ public class AppPermissionFragment extends SettingsWithHeader
             activity.finish();
             return;
         }
+
+        // Skip notification group on tv
+        if (mPermGroupName.equals(NOTIFICATIONS)) {
+            getActivity().finish();
+        }
+
         mIsStorageGroup = Objects.equals(mPermGroupName, STORAGE);
         mUser = getArguments().getParcelable(Intent.EXTRA_USER);
         mPackageLabel = BidiFormatter.getInstance().unicodeWrap(
@@ -184,6 +192,9 @@ public class AppPermissionFragment extends SettingsWithHeader
                 delayHandler.postDelayed(() -> setRadioButtonsState(buttonState), POST_DELAY_MS);
             }
         });
+        if (mIsStorageGroup) {
+            mViewModel.getFullStorageStateLiveData().observe(this, this::setSpecialStorageState);
+        }
     }
 
     @Override
@@ -252,11 +263,15 @@ public class AppPermissionFragment extends SettingsWithHeader
         if (mViewModel.getButtonStateLiveData().getValue() != null) {
             setRadioButtonsState(mViewModel.getButtonStateLiveData().getValue());
         }
+        if (mViewModel.getFullStorageStateLiveData().isInitialized() && mIsStorageGroup) {
+            setSpecialStorageState(mViewModel.getFullStorageStateLiveData().getValue());
+        }
+
     }
 
     private void setRadioButtonsState(Map<ButtonType, ButtonState> states) {
         if (states == null && mViewModel.getButtonStateLiveData().isInitialized()) {
-            pressBack(this);
+            getFragmentManager().popBackStack();
             Log.w(LOG_TAG, "invalid package " + mPackageName + " or perm group "
                     + mPermGroupName);
             Toast.makeText(
@@ -274,7 +289,7 @@ public class AppPermissionFragment extends SettingsWithHeader
         });
         mAllowAlwaysButton.setOnPreferenceClickListener((v) -> {
             if (mIsStorageGroup) {
-                showConfirmDialog(ChangeRequest.GRANT_All_FILE_ACCESS,
+                showConfirmDialog(ChangeRequest.GRANT_ALL_FILE_ACCESS,
                         R.string.special_file_access_dialog, -1, false);
             } else {
                 mViewModel.requestChange(false, this, this, ChangeRequest.GRANT_BOTH,
@@ -372,6 +387,21 @@ public class AppPermissionFragment extends SettingsWithHeader
         }
     }
 
+    private void setSpecialStorageState(FullStoragePackageState storageState) {
+        if (mAllowButton == null || !mIsStorageGroup) {
+            return;
+        }
+
+        mAllowAlwaysButton.setTitle(R.string.app_permission_button_allow_all_files);
+        mAllowForegroundButton.setTitle(R.string.app_permission_button_allow_media_only);
+
+
+        if (storageState != null && storageState.isLegacy()) {
+            mAllowButton.setTitle(R.string.app_permission_button_allow_all_files);
+            return;
+        }
+    }
+
     private void setResult(@GrantPermissionsViewHandler.Result int result) {
         Intent intent = new Intent()
                 .putExtra(EXTRA_RESULT_PERMISSION_INTERACTED, mPermGroupName)
@@ -428,12 +458,13 @@ public class AppPermissionFragment extends SettingsWithHeader
         private static final String KEY = ConfirmDialog.class.getName() + ".arg.key";
         private static final String BUTTON = ConfirmDialog.class.getName() + ".arg.button";
         private static final String ONE_TIME = ConfirmDialog.class.getName() + ".arg.onetime";
+        private static int sCode =  APP_PERMISSION_FRAGMENT_ACTION_REPORTED__BUTTON_PRESSED__ALLOW;
 
         @Override
         public Dialog onCreateDialog(Bundle savedInstanceState) {
             AppPermissionFragment fragment = (AppPermissionFragment) getTargetFragment();
             boolean isGrantFileAccess = getArguments().getSerializable(CHANGE_REQUEST)
-                    == ChangeRequest.GRANT_All_FILE_ACCESS;
+                    == ChangeRequest.GRANT_ALL_FILE_ACCESS;
             int positiveButtonStringResId = R.string.grant_dialog_button_deny_anyway;
             if (isGrantFileAccess) {
                 positiveButtonStringResId = R.string.grant_dialog_button_allow;
@@ -446,6 +477,8 @@ public class AppPermissionFragment extends SettingsWithHeader
                             (DialogInterface dialog, int which) -> {
                                 if (isGrantFileAccess) {
                                     fragment.mViewModel.setAllFilesAccess(true);
+                                    fragment.mViewModel.requestChange(false, fragment,
+                                            fragment, ChangeRequest.GRANT_BOTH, sCode);
                                 } else {
                                     fragment.mViewModel.onDenyAnyWay((ChangeRequest)
                                                     getArguments().getSerializable(CHANGE_REQUEST),
@@ -463,5 +496,31 @@ public class AppPermissionFragment extends SettingsWithHeader
             AppPermissionFragment fragment = (AppPermissionFragment) getTargetFragment();
             fragment.setRadioButtonsState(fragment.mViewModel.getButtonStateLiveData().getValue());
         }
+    }
+
+    @Override
+    public void showAdvancedConfirmDialog(AdvancedConfirmDialogArgs args) {
+        AlertDialog.Builder b = new AlertDialog.Builder(getContext())
+                .setIcon(args.getIconId())
+                .setMessage(args.getMessageId())
+                .setOnCancelListener((DialogInterface dialog) -> {
+                    setRadioButtonsState(mViewModel.getButtonStateLiveData().getValue());
+                })
+                .setNegativeButton(args.getNegativeButtonTextId(),
+                        (DialogInterface dialog, int which) -> {
+                            setRadioButtonsState(mViewModel.getButtonStateLiveData().getValue());
+                        })
+                .setPositiveButton(args.getPositiveButtonTextId(),
+                        (DialogInterface dialog, int which) -> {
+                            mViewModel.requestChange(args.getSetOneTime(),
+                                    AppPermissionFragment.this,
+                                    AppPermissionFragment.this,
+                                    args.getChangeRequest(),
+                                    args.getButtonClicked());
+                        });
+        if (args.getTitleId() != 0) {
+            b.setTitle(args.getTitleId());
+        }
+        b.show();
     }
 }

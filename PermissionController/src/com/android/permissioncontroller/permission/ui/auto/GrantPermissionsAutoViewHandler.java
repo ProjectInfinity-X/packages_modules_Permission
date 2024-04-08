@@ -91,15 +91,18 @@ public class GrantPermissionsAutoViewHandler implements GrantPermissionsViewHand
 
     @Override
     public void updateUi(String groupName, int groupCount, int groupIndex, Icon icon,
-            CharSequence message, CharSequence detailMessage, boolean[] buttonVisibilities,
+            CharSequence message, CharSequence detailMessage,
+            CharSequence permissionRationaleMessage, boolean[] buttonVisibilities,
             boolean[] locationVisibilities) {
+        // permissionRationaleMessage ignored by auto
+
         mGroupName = groupName;
         mGroupCount = groupCount;
         mGroupIndex = groupIndex;
         mGroupIcon = icon;
         mGroupMessage = message;
         mDetailMessage = detailMessage;
-        mButtonVisibilities = buttonVisibilities;
+        setButtonVisibilities(buttonVisibilities);
 
         update();
     }
@@ -117,7 +120,7 @@ public class GrantPermissionsAutoViewHandler implements GrantPermissionsViewHand
                 .setAllowDismissButton(false)
                 .setOnDismissListener((dialog) -> {
                     mDialog = null;
-                    mResultListener.onPermissionGrantResult(mGroupName, DENIED);
+                    mResultListener.onPermissionGrantResult(mGroupName, CANCELED);
                 });
         if (mGroupIcon != null) {
             builder.setIcon(mGroupIcon.loadDrawable(mContext));
@@ -160,6 +163,7 @@ public class GrantPermissionsAutoViewHandler implements GrantPermissionsViewHand
         }
 
         CarUiContentListItem item = new CarUiContentListItem(CarUiContentListItem.Action.NONE);
+        item.setSecure(true);
         item.setTitle(mContext.getString(stringId));
         item.setOnItemClickedListener(i -> {
             mDialog.setOnDismissListener(null);
@@ -189,9 +193,17 @@ public class GrantPermissionsAutoViewHandler implements GrantPermissionsViewHand
         mGroupCount = savedInstanceState.getInt(ARG_GROUP_COUNT);
         mGroupIndex = savedInstanceState.getInt(ARG_GROUP_INDEX);
         mDetailMessage = savedInstanceState.getCharSequence(ARG_GROUP_DETAIL_MESSAGE);
-        mButtonVisibilities = savedInstanceState.getBooleanArray(ARG_BUTTON_VISIBILITIES);
+        setButtonVisibilities(savedInstanceState.getBooleanArray(ARG_BUTTON_VISIBILITIES));
 
         update();
+    }
+
+    private void setButtonVisibilities(boolean[] visibilities) {
+        // If GrantPermissionsActivity sent the user directly to settings, button visibilities are
+        // not created. If the activity was then destroyed by the system, once the activity is
+        // recreated to perform onActivityResult, it will try to loadInstanceState in onCreate but
+        // the button visibilities were never set, so they will be null.
+        mButtonVisibilities = visibilities == null ? new boolean[0] : visibilities;
     }
 
     @Override
@@ -199,7 +211,7 @@ public class GrantPermissionsAutoViewHandler implements GrantPermissionsViewHand
         if (mDialog != null) {
             mDialog.dismiss();
         } else if (mResultListener != null) {
-            mResultListener.onPermissionGrantResult(mGroupName, DENIED);
+            mResultListener.onPermissionGrantResult(mGroupName, CANCELED);
         }
     }
 }

@@ -18,12 +18,17 @@ package com.android.permissioncontroller.permission.model;
 
 import static android.Manifest.permission.ACCESS_BACKGROUND_LOCATION;
 import static android.Manifest.permission.ACCESS_FINE_LOCATION;
+import static android.Manifest.permission.POST_NOTIFICATIONS;
 import static android.app.AppOpsManager.MODE_ALLOWED;
 import static android.app.AppOpsManager.MODE_FOREGROUND;
 import static android.app.AppOpsManager.MODE_IGNORED;
 import static android.app.AppOpsManager.OPSTR_LEGACY_STORAGE;
 import static android.content.pm.PackageManager.PERMISSION_GRANTED;
+import static android.health.connect.HealthPermissions.HEALTH_PERMISSION_GROUP;
 
+import static com.android.permissioncontroller.permission.utils.Utils.isHealthPermissionUiEnabled;
+
+import android.Manifest;
 import android.app.ActivityManager;
 import android.app.AppOpsManager;
 import android.app.Application;
@@ -34,6 +39,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.PermissionGroupInfo;
 import android.content.pm.PermissionInfo;
+import android.os.Binder;
 import android.os.Build;
 import android.os.UserHandle;
 import android.permission.PermissionManager;
@@ -45,10 +51,15 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 
+import com.android.modules.utils.build.SdkLevel;
+import com.android.permissioncontroller.PermissionControllerApplication;
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.permission.service.LocationAccessCheck;
 import com.android.permissioncontroller.permission.utils.ArrayUtils;
+import com.android.permissioncontroller.permission.utils.ContextCompat;
+import com.android.permissioncontroller.permission.utils.KotlinUtils;
 import com.android.permissioncontroller.permission.utils.LocationUtils;
+import com.android.permissioncontroller.permission.utils.PermissionMapping;
 import com.android.permissioncontroller.permission.utils.SoftRestrictedPermissionPolicy;
 import com.android.permissioncontroller.permission.utils.Utils;
 
@@ -142,6 +153,14 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
     private boolean mTriggerLocationAccessCheckOnPersist;
 
     /**
+     * Set if {@link LocationAccessCheck#cancelBackgroundAccessWarningNotification()} should be
+     * triggered to cancel the warning once the changes are persisted.
+     */
+    private boolean mCancelLocationAccessWarningOnRevoke;
+
+    private boolean mIsSelfRevoked;
+
+    /**
      * Create the app permission group.
      *
      * @param context the {@code Context} to retrieve system services.
@@ -167,7 +186,7 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
             return null;
         }
 
-        String group = Utils.getGroupOfPermission(permissionInfo);
+        String group = PermissionMapping.getGroupOfPermission(permissionInfo);
         PackageItemInfo groupInfo = permissionInfo;
         if (group != null) {
             try {
@@ -318,10 +337,18 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
                 continue;
             }
 
-            final boolean granted = (packageInfo.requestedPermissionsFlags[i]
-                    & PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0;
+            boolean granted;
+            if (ContextCompat.getDeviceId(context) == ContextCompat.DEVICE_ID_DEFAULT) {
+                granted = (packageInfo.requestedPermissionsFlags[i]
+                        & PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0;
+            } else {
+                int result = packageManager.checkPermission(requestedPermission, packageName);
+                granted = result == PackageManager.PERMISSION_GRANTED;
+            }
 
             final String appOp = PLATFORM_PACKAGE_NAME.equals(requestedPermissionInfo.packageName)
+                    || (isHealthPermissionUiEnabled() && HEALTH_PERMISSION_GROUP.equals(
+                    requestedPermissionInfo.group))
                     ? AppOpsManager.permissionToOp(requestedPermissionInfo.name) : null;
 
             final boolean appOpAllowed;
@@ -720,14 +747,38 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
     }
 
     public boolean areRuntimePermissionsGranted(String[] filterPermissions) {
+        return areRuntimePermissionsGranted(filterPermissions, false);
+    }
+
+    /**
+     * @param filterPermissions the permissions to check for, null for all in this group
+     * @param asOneTime add the requirement that at least one of the granted permissions must have
+     *                 the ONE_TIME flag to return true
+     */
+    public boolean areRuntimePermissionsGranted(String[] filterPermissions, boolean asOneTime) {
+        return areRuntimePermissionsGranted(filterPermissions, asOneTime, true);
+    }
+
+    /**
+     * Returns true if at least one of the permissions in filterPermissions (or the entire
+     * permission group if null) should be considered granted and satisfy the requirements
+     * described by asOneTime and includingAppOp.
+     *
+     * @param filterPermissions the permissions to check for, null for all in this group
+     * @param asOneTime add the requirement that the granted permission must have the ONE_TIME flag
+     * @param includingAppOp add the requirement that if the granted permissions has a
+     *                       corresponding AppOp, it must be allowed.
+     */
+    public boolean areRuntimePermissionsGranted(String[] filterPermissions, boolean asOneTime,
+            boolean includingAppOp) {
         if (LocationUtils.isLocationGroupAndProvider(mContext, mName, mPackageInfo.packageName)) {
-            return LocationUtils.isLocationEnabled(mContext);
+            return LocationUtils.isLocationEnabled(mContext) && !asOneTime;
         }
         // The permission of the extra location controller package is determined by the status of
         // the controller package itself.
         if (LocationUtils.isLocationGroupAndControllerExtraPackage(
                 mContext, mName, mPackageInfo.packageName)) {
-            return LocationUtils.isExtraLocationControllerPackageEnabled(mContext);
+            return LocationUtils.isExtraLocationControllerPackageEnabled(mContext) && !asOneTime;
         }
         final int permissionCount = mPermissions.size();
         for (int i = 0; i < permissionCount; i++) {
@@ -736,9 +787,17 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
                     && !ArrayUtils.contains(filterPermissions, permission.getName())) {
                 continue;
             }
-            if (permission.isGrantedIncludingAppOp()) {
+            boolean isGranted = includingAppOp ? permission.isGrantedIncludingAppOp()
+                    : permission.isGranted();
+            if (isGranted && (!asOneTime || permission.isOneTime())) {
                 return true;
             }
+        }
+        if (mBackgroundPermissions != null) {
+            // If asOneTime is true and none of the foreground permissions are one-time, but some
+            // background permissions are, then we still want to return true.
+            return mBackgroundPermissions.areRuntimePermissionsGranted(filterPermissions,
+                    asOneTime, includingAppOp);
         }
         return false;
     }
@@ -833,7 +892,20 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
      * @param reason The reason why the apps are killed
      */
     private void killApp(String reason) {
+        if (shouldSkipKillForGroup()) {
+            return;
+        }
+
         mActivityManager.killUid(mPackageInfo.applicationInfo.uid, reason);
+    }
+
+    private boolean shouldSkipKillForGroup() {
+        if (!mName.equals(Manifest.permission_group.NOTIFICATIONS)) {
+            return false;
+        }
+
+        return KotlinUtils.INSTANCE.shouldSkipKillOnPermDeny(PermissionControllerApplication.get(),
+                POST_NOTIFICATIONS, mPackageInfo.packageName, mUserHandle);
     }
 
     /**
@@ -871,8 +943,12 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
             }
 
             boolean wasGranted = permission.isGrantedIncludingAppOp();
+            boolean isPermissionSplitFromNonRuntime = KotlinUtils.isPermissionSplitFromNonRuntime(
+                    mContext,
+                    permission.getName(),
+                    mPackageInfo.applicationInfo.targetSdkVersion);
 
-            if (mAppSupportsRuntimePermissions) {
+            if (mAppSupportsRuntimePermissions && !isPermissionSplitFromNonRuntime) {
                 // Do not touch permissions fixed by the system.
                 if (permission.isSystemFixed()) {
                     wasAllGranted = false;
@@ -906,6 +982,9 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
                     if (permission.isUserSet()) {
                         permission.setUserSet(false);
                     }
+                }
+                if (permission.isReviewRequired()) {
+                    permission.unsetReviewRequired();
                 }
             } else {
                 // Legacy apps cannot have a not granted permission but just in case.
@@ -1057,7 +1136,16 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
                 break;
             }
 
-            if (mAppSupportsRuntimePermissions) {
+            boolean wasGranted = permission.isGrantedIncludingAppOp();
+
+            boolean isPermissionSplitFromNonRuntime =
+                    KotlinUtils.isPermissionSplitFromNonRuntime(
+                            mContext,
+                            permission.getName(),
+                            mPackageInfo.applicationInfo.targetSdkVersion);
+
+            if (mAppSupportsRuntimePermissions && !isPermissionSplitFromNonRuntime) {
+
                 // Revoke the permission if needed.
                 if (permission.isGranted()) {
                     permission.setGranted(false);
@@ -1101,6 +1189,35 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
                     // Mark that the permission is kept granted only for compatibility.
                     if (!permission.isRevokedCompat()) {
                         permission.setRevokedCompat(true);
+                    }
+
+                    permission.setRevokeWhenRequested(false);
+                }
+            }
+
+            // If we revoke background access to the fine location, we trigger a check to cancel
+            // the location access check notification to avoid stale warnings
+            if (wasGranted && !permission.isGrantedIncludingAppOp()) {
+                if (permission.getName().equals(ACCESS_FINE_LOCATION)) {
+                    Permission bgPerm = permission.getBackgroundPermission();
+                    if (bgPerm != null) {
+                        if (!bgPerm.isGrantedIncludingAppOp()) {
+                            mCancelLocationAccessWarningOnRevoke = true;
+                        }
+                    }
+                } else if (permission.getName().equals(ACCESS_BACKGROUND_LOCATION)) {
+                    ArrayList<Permission> fgPerms = permission.getForegroundPermissions();
+                    if (fgPerms != null) {
+                        int numFgPerms = fgPerms.size();
+                        for (int fgPermNum = 0; fgPermNum < numFgPerms; fgPermNum++) {
+                            Permission fgPerm = fgPerms.get(fgPermNum);
+                            if (fgPerm.getName().equals(ACCESS_FINE_LOCATION)) {
+                                if (!fgPerm.isGrantedIncludingAppOp()) {
+                                    mCancelLocationAccessWarningOnRevoke = true;
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1154,6 +1271,13 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
     }
 
     /**
+     * Mark this group as having been self-revoked.
+     */
+    public void setSelfRevoked() {
+        mIsSelfRevoked = true;
+    }
+
+    /**
      * Set the one-time flag for all permissions in this group.
      *
      * @param isOneTime if the flag should be set or not
@@ -1162,9 +1286,7 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
         final int permissionCount = mPermissions.size();
         for (int i = 0; i < permissionCount; i++) {
             Permission permission = mPermissions.valueAt(i);
-            if (!permission.isBackgroundPermission()) {
-                permission.setOneTime(isOneTime);
-            }
+            permission.setOneTime(isOneTime);
         }
 
         if (!mDelayChanges) {
@@ -1238,7 +1360,7 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
      * @return {@code true} iff this group supports one-time permissions
      */
     public boolean supportsOneTimeGrant() {
-        return Utils.supportsOneTimeGrant(getName());
+        return PermissionMapping.supportsOneTimeGrant(getName());
     }
 
     public int getFlags() {
@@ -1307,6 +1429,24 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
             }
         }
         return false;
+    }
+
+    /**
+     * @return Whether at least one permission is granted and every granted permission is one-time
+     */
+    public boolean isStrictlyOneTime() {
+        boolean oneTimePermissionFound = false;
+        final int permissionCount = mPermissions.size();
+        for (int i = 0; i < permissionCount; i++) {
+            Permission permission = mPermissions.valueAt(i);
+            if (permission.isGranted()) {
+                if (!permission.isOneTime()) {
+                    return false;
+                }
+                oneTimePermissionFound = true;
+            }
+        }
+        return oneTimePermissionFound;
     }
 
     @Override
@@ -1387,9 +1527,8 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
      *                                     caller has to make sure to kill the app if needed.
      */
     public void persistChanges(boolean mayKillBecauseOfAppOpsChange) {
-        persistChanges(mayKillBecauseOfAppOpsChange, null);
+        persistChanges(mayKillBecauseOfAppOpsChange, null, null);
     }
-
 
     /**
      * If the changes to this group were delayed, persist them to the platform.
@@ -1400,6 +1539,20 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
      * @param revokeReason If any permissions are getting revoked, the reason for revoking them.
      */
     public void persistChanges(boolean mayKillBecauseOfAppOpsChange, String revokeReason) {
+        persistChanges(mayKillBecauseOfAppOpsChange, revokeReason, null);
+    }
+
+    /**
+     * If the changes to this group were delayed, persist them to the platform.
+     *
+     * @param mayKillBecauseOfAppOpsChange If the app these permissions belong to may be killed if
+     *                                     app ops change. If this is set to {@code false} the
+     *                                     caller has to make sure to kill the app if needed.
+     * @param revokeReason If any permissions are getting revoked, the reason for revoking them.
+     * @param filterPermissions If provided, only persist state for the given permissions
+     */
+    public void persistChanges(boolean mayKillBecauseOfAppOpsChange, String revokeReason,
+            Set<String> filterPermissions) {
         int uid = mPackageInfo.applicationInfo.uid;
 
         int numPermissions = mPermissions.size();
@@ -1407,6 +1560,10 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
 
         for (int i = 0; i < numPermissions; i++) {
             Permission permission = mPermissions.valueAt(i);
+
+            if (filterPermissions != null && !filterPermissions.contains(permission.getName())) {
+                continue;
+            }
 
             if (!permission.isSystemFixed()) {
                 if (permission.isGranted()) {
@@ -1435,7 +1592,9 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
                     | (permission.isPolicyFixed() ? PackageManager.FLAG_PERMISSION_POLICY_FIXED : 0)
                     | (permission.isReviewRequired()
                     ? PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED : 0)
-                    | (permission.isOneTime() ? PackageManager.FLAG_PERMISSION_ONE_TIME : 0);
+                    | (permission.isOneTime() ? PackageManager.FLAG_PERMISSION_ONE_TIME : 0)
+                    | (permission.isSelectedLocationAccuracy()
+                    ? PackageManager.FLAG_PERMISSION_SELECTED_LOCATION_ACCURACY : 0);
 
             mPackageManager.updatePermissionFlags(permission.getName(),
                     mPackageInfo.packageName,
@@ -1446,7 +1605,8 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
                             | (permission.isReviewRequired()
                             ? 0 : PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED)
                             | PackageManager.FLAG_PERMISSION_ONE_TIME
-                            | PackageManager.FLAG_PERMISSION_AUTO_REVOKED, // clear auto revoke
+                            | PackageManager.FLAG_PERMISSION_AUTO_REVOKED // clear auto revoke
+                            | PackageManager.FLAG_PERMISSION_SELECTED_LOCATION_ACCURACY,
                     flags, mUserHandle);
 
             if (permission.affectsAppOp()) {
@@ -1454,12 +1614,13 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
                     // Enabling/Disabling an app op may put the app in a situation in which it has
                     // a handle to state it shouldn't have, so we have to kill the app. This matches
                     // the revoke runtime permission behavior.
+                    boolean wasChanged;
                     if (permission.isAppOpAllowed()) {
-                        boolean wasChanged = allowAppOp(permission, uid);
-                        shouldKillApp |= wasChanged && !mAppSupportsRuntimePermissions;
+                        wasChanged = allowAppOp(permission, uid);
                     } else {
-                        shouldKillApp |= disallowAppOp(permission, uid);
+                        wasChanged = disallowAppOp(permission, uid);
                     }
+                    shouldKillApp |= wasChanged && !mAppSupportsRuntimePermissions;
                 }
             }
         }
@@ -1473,14 +1634,35 @@ public final class AppPermissionGroup implements Comparable<AppPermissionGroup> 
             mTriggerLocationAccessCheckOnPersist = false;
         }
 
+        if (mCancelLocationAccessWarningOnRevoke) {
+            new LocationAccessCheck(mContext, null).cancelBackgroundAccessWarningNotification(
+                    mPackageInfo.packageName, mUserHandle, true);
+            mCancelLocationAccessWarningOnRevoke = false;
+        }
+
         String packageName = mPackageInfo.packageName;
-        if (isOneTime() && areRuntimePermissionsGranted()) {
-            mContext.getSystemService(PermissionManager.class)
-                    .startOneTimePermissionSession(packageName,
-                            Utils.getOneTimePermissionsTimeout(),
-                            ONE_TIME_PACKAGE_IMPORTANCE_LEVEL_TO_RESET_TIMER,
-                            ONE_TIME_PACKAGE_IMPORTANCE_LEVEL_TO_KEEP_SESSION_ALIVE);
-        } else if (!Utils.hasOneTimePermissions(mContext, packageName)) {
+        if (areRuntimePermissionsGranted(null, true, false)) {
+            // Required to read device config in Utils.getOneTimePermissions*().
+            final long token = Binder.clearCallingIdentity();
+            try {
+                if (SdkLevel.isAtLeastT()) {
+                    mContext.getSystemService(PermissionManager.class)
+                            .startOneTimePermissionSession(packageName,
+                                    Utils.getOneTimePermissionsTimeout(),
+                                    Utils.getOneTimePermissionsKilledDelay(mIsSelfRevoked),
+                                    ONE_TIME_PACKAGE_IMPORTANCE_LEVEL_TO_RESET_TIMER,
+                                    ONE_TIME_PACKAGE_IMPORTANCE_LEVEL_TO_KEEP_SESSION_ALIVE);
+                } else {
+                    mContext.getSystemService(PermissionManager.class)
+                            .startOneTimePermissionSession(packageName,
+                                    Utils.getOneTimePermissionsTimeout(),
+                                    ONE_TIME_PACKAGE_IMPORTANCE_LEVEL_TO_RESET_TIMER,
+                                    ONE_TIME_PACKAGE_IMPORTANCE_LEVEL_TO_KEEP_SESSION_ALIVE);
+                }
+            } finally {
+                Binder.restoreCallingIdentity(token);
+            }
+        } else {
             mContext.getSystemService(PermissionManager.class)
                     .stopOneTimePermissionSession(packageName);
         }

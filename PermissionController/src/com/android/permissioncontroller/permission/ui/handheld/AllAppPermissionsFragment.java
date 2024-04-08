@@ -47,6 +47,7 @@ import com.android.permissioncontroller.permission.ui.model.AllAppPermissionsVie
 import com.android.permissioncontroller.permission.ui.model.AllAppPermissionsViewModelFactory;
 import com.android.permissioncontroller.permission.utils.ArrayUtils;
 import com.android.permissioncontroller.permission.utils.KotlinUtils;
+import com.android.permissioncontroller.permission.utils.PermissionMapping;
 import com.android.permissioncontroller.permission.utils.Utils;
 
 import java.text.Collator;
@@ -69,13 +70,6 @@ public final class AllAppPermissionsFragment extends SettingsWithLargeHeader {
     private String mPackageName;
     private String mFilterGroup;
     private UserHandle mUser;
-
-    public static AllAppPermissionsFragment newInstance(@NonNull String packageName,
-            @Nullable String filterGroup, @NonNull UserHandle userHandle) {
-        AllAppPermissionsFragment instance = new AllAppPermissionsFragment();
-        instance.setArguments(createArgs(packageName, filterGroup, userHandle));
-        return instance;
-    }
 
     /**
      * Create a bundle with the arguments needed by this fragment
@@ -222,9 +216,9 @@ public final class AllAppPermissionsFragment extends SettingsWithLargeHeader {
         } else if (rKey.equals(KEY_OTHER)) {
             return -1;
         }
-        if (Utils.isModernPermissionGroup(lKey)
-                != Utils.isModernPermissionGroup(rKey)) {
-            return Utils.isModernPermissionGroup(lKey) ? -1 : 1;
+        if (PermissionMapping.isPlatformPermissionGroup(lKey)
+                != PermissionMapping.isPlatformPermissionGroup(rKey)) {
+            return PermissionMapping.isPlatformPermissionGroup(lKey) ? -1 : 1;
         }
         return mCollator.compare(lhs.getTitle().toString(), rhs.getTitle().toString());
     }

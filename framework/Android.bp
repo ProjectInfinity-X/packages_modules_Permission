@@ -18,12 +18,12 @@ package {
 
 filegroup {
     name: "framework-permission-sources",
+    defaults: ["framework-sources-module-defaults"],
     srcs: [
         "java/**/*.java",
         "java/**/*.aidl",
     ],
     path: "java",
-    visibility: ["//frameworks/base"],
 }
 
 java_sdk_library {
@@ -44,6 +44,9 @@ java_sdk_library {
         "com.android.permission",
         "test_com.android.permission",
     ],
+    lint: {
+        strict_updatability_linting: true,
+    },
     min_sdk_version: "30",
     permitted_packages: [
         "android.permission",
@@ -51,4 +54,13 @@ java_sdk_library {
     ],
     hostdex: true,
     installable: true,
+}
+
+java_api_contribution {
+    name: "framework-permission-public-stubs",
+    api_surface: "public",
+    api_file: "api/current.txt",
+    visibility: [
+        "//build/orchestrator/apis",
+    ],
 }

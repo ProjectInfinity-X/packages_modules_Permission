@@ -33,26 +33,28 @@ android_test {
     min_sdk_version: "30",
 
     resource_dirs: [
-        "main_res",
+        "test_res",
     ],
 
     srcs: [
-        ":permissioncontroller-sources",
-
         "src/**/*.kt",
     ],
 
     libs: [
-        "android.car-stubs",
-
         "android.test.base",
         "android.test.runner",
+        "safety-center-annotations",
     ],
 
     static_libs: [
-        "iconloader",
+        "PermissionController-lib",
+        "iconloader_sc_mainline_prod",
         "com.google.android.material_material",
         "androidx.transition_transition",
+        "androidx.compose.foundation_foundation",
+        "androidx.compose.runtime_runtime",
+        "androidx.compose.runtime_runtime-livedata",
+        "androidx.compose.ui_ui",
         "androidx-constraintlayout_constraintlayout",
         "androidx.core_core",
         "androidx.media_media",
@@ -67,6 +69,7 @@ android_test {
         "androidx.leanback_leanback-preference",
         "androidx.lifecycle_lifecycle-extensions",
         "androidx.lifecycle_lifecycle-common-java8",
+        "androidx.wear.compose_compose-material",
         "kotlin-stdlib",
         "kotlinx-coroutines-android",
         "androidx.navigation_navigation-common-ktx",
@@ -82,16 +85,44 @@ android_test {
         "SettingsLibActionBarShadow",
         "SettingsLibProgressBar",
         "SettingsLibCollapsingToolbarBaseActivity",
+        "SettingsLibSettingsTheme",
+        "SettingsLibFooterPreference",
+        "SettingsLibSelectorWithWidgetPreference",
+        "SettingsLibTwoTargetPreference",
+        "SettingsLibActivityEmbedding",
+        "SettingsLibIllustrationPreference",
         "androidx.annotation_annotation",
         "permissioncontroller-statsd",
+        // The PermissionController build file includes android.car-stubs in its libs dependency
+        // and that works since the phone code does not initialize any classes with a android.car
+        // dependency at runtime. If it did, the class loading would throw an exception. The "libs"
+        // usage in the main module means that the dependency is loaded from the device, instead of
+        // being statically included, which helps avoid apk bloat and conflicting dependencies.
+        // To use just one test target, without any form-factor-specific configuration, we need to
+        // statically include this car dependency. Otherwise running these unit tests against a
+        // phone will cause the tests to fail due to an initialization exception for unfound car
+        // dependency classes. Here we use the android.car target instead of android.car-stubs so
+        // that we can utilize some data classes within the car dependency. If all dependencies were
+        // mocked, then the stubs dependency would be suitable. Note that on Auto device the boot
+        // class path will always override the static dependency.
+        "android.car",
         "car-ui-lib",
         "libprotobuf-java-lite",
         "SettingsLibUtils",
         "modules-utils-build_system",
+        "safety-center-internal-data",
+        "safety-center-pending-intents",
+        "safety-center-resources-lib",
+        "safety-label",
+        "role-controller",
+        "lottie",
+        "permissions-flags-lib",
+        "android.permission.flags-aconfig-java",
 
         "androidx.test.rules",
         "androidx.test.ext.truth",
         "androidx.test.ext.junit",
+        "kotlinx_coroutines_test",
         "mockito-target-extended-minus-junit4",
     ],
 
@@ -99,8 +130,12 @@ android_test {
         "libdexmakerjvmtiagent",
         "libstaticjvmtiagent",
     ],
+    compile_multilib: "both",
 
-    aaptflags: ["--custom-package com.android.permissioncontroller"],
+    test_suites: [
+        "device-tests",
+        "mts-permission",
+    ],
 
-    test_suites: ["device-tests"]
+    kotlincflags: ["-Xjvm-default=all"],
 }

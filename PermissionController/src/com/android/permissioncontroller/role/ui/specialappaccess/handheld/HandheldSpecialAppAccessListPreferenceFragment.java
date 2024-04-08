@@ -23,8 +23,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.preference.PreferenceFragmentCompat;
 
-import com.android.permissioncontroller.role.ui.TwoTargetPreference;
-import com.android.permissioncontroller.role.ui.handheld.AppIconSettingsButtonPreference;
+import com.android.permissioncontroller.role.ui.RolePreference;
+import com.android.permissioncontroller.role.ui.handheld.HandheldRolePreference;
 import com.android.permissioncontroller.role.ui.specialappaccess.SpecialAppAccessListChildFragment;
 
 /**
@@ -65,8 +65,8 @@ public class HandheldSpecialAppAccessListPreferenceFragment extends PreferenceFr
 
     @NonNull
     @Override
-    public TwoTargetPreference createPreference(@NonNull Context context) {
-        return new AppIconSettingsButtonPreference(context);
+    public RolePreference createPreference(@NonNull Context context) {
+        return new HandheldRolePreference(context);
     }
 
     @Override
@@ -86,8 +86,8 @@ public class HandheldSpecialAppAccessListPreferenceFragment extends PreferenceFr
     public interface Parent {
 
         /**
-         * Callback when changes have been made to the {@link PreferenceScreen} of the parent
-         * {@link PreferenceFragmentCompat}.
+         * Callback when changes have been made to the {@link androidx.preference.PreferenceScreen}
+         * of the parent {@link PreferenceFragmentCompat}.
          */
         void onPreferenceScreenChanged();
     }

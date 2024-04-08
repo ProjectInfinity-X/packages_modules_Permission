@@ -64,10 +64,17 @@
     <dimen name="car_preference_icon_size">44dp</dimen>
     <dimen name="car_radius_1">4dp</dimen>
     <dimen name="car_preference_row_vertical_margin">16dp</dimen>
+    <dimen name="car_divider_preference_height">1dp</dimen>
+    <dimen name="car_divider_preference_margin_top">@*android:dimen/car_padding_2</dimen>
+    <dimen name="car_divider_preference_margin_bottom">@*android:dimen/car_padding_2</dimen>
 
     <dimen name="location_accuracy_image_size">130dp</dimen>
 
     <item name="permission_access_time_dialog_width_scalar" format="float" type="dimen">0.9</item>
     <item name="permission_access_time_dialog_height_scalar" format="float" type="dimen">0.7</item>
 
+    <item name="privhub_label_radius_scalar" format="float" type="dimen">1.1</item>
+    <dimen name="privhub_circle_stroke_width">8dp</dimen>
+
+    <dimen name="privhub_details_recycler_view_bottom_padding">96dp</dimen>
 </resources>

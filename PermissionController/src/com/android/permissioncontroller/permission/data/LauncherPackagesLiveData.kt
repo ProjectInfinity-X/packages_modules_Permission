@@ -13,32 +13,50 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:Suppress("DEPRECATION")
 
 package com.android.permissioncontroller.permission.data
 
 import android.content.Intent
+import android.content.pm.PackageManager.FEATURE_LEANBACK
 import android.content.pm.PackageManager.MATCH_DIRECT_BOOT_AWARE
 import android.content.pm.PackageManager.MATCH_DIRECT_BOOT_UNAWARE
 import com.android.permissioncontroller.PermissionControllerApplication
 import kotlinx.coroutines.Job
 
-/**
- * A livedata which stores a list of package names of packages which have launcher icons.
- */
-object LauncherPackagesLiveData : SmartAsyncMediatorLiveData<Set<String>>(),
-    PackageBroadcastReceiver.PackageBroadcastListener {
+/** A livedata which stores a list of package names of packages which have launcher icons. */
+object LauncherPackagesLiveData :
+    SmartAsyncMediatorLiveData<Set<String>>(), PackageBroadcastReceiver.PackageBroadcastListener {
 
-    private val LAUNCHER_INTENT = Intent(Intent.ACTION_MAIN, null)
-        .addCategory(Intent.CATEGORY_LAUNCHER)
+    private val LAUNCHER_INTENT =
+        Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LAUNCHER)
+
+    // On ATV some apps may have a leanback launcher icon but no regular launcher icon
+    private val LEANBACK_LAUNCHER_INTENT =
+        Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
 
     override suspend fun loadDataAndPostValue(job: Job) {
         val launcherPkgs = mutableSetOf<String>()
-        for (info in PermissionControllerApplication.get().packageManager.queryIntentActivities(
-            LAUNCHER_INTENT, MATCH_DIRECT_BOOT_AWARE or MATCH_DIRECT_BOOT_UNAWARE)) {
+
+        loadPkgsFromIntent(launcherPkgs, LAUNCHER_INTENT)
+        if (
+            PermissionControllerApplication.get().packageManager.hasSystemFeature(FEATURE_LEANBACK)
+        ) {
+            loadPkgsFromIntent(launcherPkgs, LEANBACK_LAUNCHER_INTENT)
+        }
+        postValue(launcherPkgs)
+    }
+
+    private fun loadPkgsFromIntent(launcherPkgs: MutableSet<String>, intent: Intent) {
+        for (info in
+            PermissionControllerApplication.get()
+                .packageManager
+                .queryIntentActivities(
+                    intent,
+                    MATCH_DIRECT_BOOT_AWARE or MATCH_DIRECT_BOOT_UNAWARE
+                )) {
             launcherPkgs.add(info.activityInfo.packageName)
         }
-
-        postValue(launcherPkgs)
     }
 
     override fun onPackageUpdate(packageName: String) {

@@ -16,18 +16,16 @@
 
 package com.android.permissioncontroller.role.ui.auto;
 
-import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.preference.Preference;
-import androidx.preference.SwitchPreference;
-import androidx.preference.TwoStatePreference;
 
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.auto.AutoSettingsFrameFragment;
+import com.android.permissioncontroller.role.ui.RoleApplicationPreference;
 import com.android.permissioncontroller.role.ui.specialappaccess.SpecialAppAccessChildFragment;
 
 /** Automotive fragment for displaying special app access for a role. */
@@ -82,14 +80,14 @@ public class AutoSpecialAppAccessFragment extends AutoSettingsFrameFragment impl
 
     @NonNull
     @Override
-    public TwoStatePreference createApplicationPreference(@NonNull Context context) {
-        return new SwitchPreference(context);
+    public RoleApplicationPreference createApplicationPreference() {
+        return new AutoSwitchPreference(requireContext());
     }
 
     @NonNull
     @Override
-    public Preference createFooterPreference(@NonNull Context context) {
-        Preference preference = new Preference(context);
+    public Preference createFooterPreference() {
+        Preference preference = new Preference(requireContext());
         preference.setIcon(R.drawable.ic_info_outline);
         preference.setSelectable(false);
         return preference;

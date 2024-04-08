@@ -17,21 +17,20 @@
 package com.android.permissioncontroller.role.ui;
 
 import android.os.Bundle;
-import android.view.WindowManager;
 
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
-import androidx.fragment.app.FragmentActivity;
 
 import com.android.permissioncontroller.DeviceUtils;
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.role.ui.auto.AutoDefaultAppListFragment;
 import com.android.permissioncontroller.role.ui.handheld.HandheldDefaultAppListFragment;
+import com.android.permissioncontroller.role.ui.wear.WearDefaultAppListFragment;
 
 /**
  * Activity for the list of default apps.
  */
-public class DefaultAppListActivity extends FragmentActivity {
+public class DefaultAppListActivity extends SettingsActivity {
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -43,13 +42,12 @@ public class DefaultAppListActivity extends FragmentActivity {
 
         super.onCreate(savedInstanceState);
 
-        getWindow().addSystemFlags(
-                WindowManager.LayoutParams.SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAY_WINDOWS);
-
         if (savedInstanceState == null) {
             Fragment fragment;
             if (DeviceUtils.isAuto(this)) {
                 fragment = AutoDefaultAppListFragment.newInstance();
+            } else if (DeviceUtils.isWear(this)) {
+                fragment = WearDefaultAppListFragment.Companion.newInstance();
             } else {
                 fragment = HandheldDefaultAppListFragment.newInstance();
             }

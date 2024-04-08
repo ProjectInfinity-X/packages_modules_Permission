@@ -16,7 +16,6 @@
 
 package com.android.permissioncontroller.role.ui.auto;
 
-import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.UserHandle;
@@ -24,12 +23,12 @@ import android.os.UserHandle;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.preference.Preference;
-import androidx.preference.TwoStatePreference;
 
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.auto.AutoSettingsFrameFragment;
-import com.android.permissioncontroller.role.model.Role;
 import com.android.permissioncontroller.role.ui.DefaultAppChildFragment;
+import com.android.permissioncontroller.role.ui.RoleApplicationPreference;
+import com.android.role.controller.model.Role;
 
 /** Screen to pick a default app for a particular {@link Role}. */
 public class AutoDefaultAppFragment extends AutoSettingsFrameFragment implements
@@ -91,14 +90,14 @@ public class AutoDefaultAppFragment extends AutoSettingsFrameFragment implements
 
     @NonNull
     @Override
-    public TwoStatePreference createApplicationPreference(@NonNull Context context) {
-        return new AutoDefaultAppPreference(context);
+    public RoleApplicationPreference createApplicationPreference() {
+        return new AutoRadioPreference(requireContext());
     }
 
     @NonNull
     @Override
-    public Preference createFooterPreference(@NonNull Context context) {
-        Preference preference = new Preference(context);
+    public Preference createFooterPreference() {
+        Preference preference = new Preference(requireContext());
         preference.setIcon(R.drawable.ic_info_outline);
         preference.setSelectable(false);
         return preference;

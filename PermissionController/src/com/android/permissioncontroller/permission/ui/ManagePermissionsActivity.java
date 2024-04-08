@@ -16,58 +16,87 @@
 
 package com.android.permissioncontroller.permission.ui;
 
+import static android.health.connect.HealthPermissions.HEALTH_PERMISSION_GROUP;
 import static android.view.WindowManager.LayoutParams.SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAY_WINDOWS;
 
 import static com.android.permissioncontroller.Constants.ACTION_MANAGE_AUTO_REVOKE;
 import static com.android.permissioncontroller.Constants.EXTRA_SESSION_ID;
 import static com.android.permissioncontroller.Constants.INVALID_SESSION_ID;
+import static com.android.permissioncontroller.Constants.UNUSED_APPS_SAFETY_CENTER_SOURCE_ID;
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSION_GROUPS_FRAGMENT_AUTO_REVOKE_ACTION;
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSION_GROUPS_FRAGMENT_AUTO_REVOKE_ACTION__ACTION__OPENED_FOR_AUTO_REVOKE;
 import static com.android.permissioncontroller.PermissionControllerStatsLog.APP_PERMISSION_GROUPS_FRAGMENT_AUTO_REVOKE_ACTION__ACTION__OPENED_FROM_INTENT;
 import static com.android.permissioncontroller.PermissionControllerStatsLog.AUTO_REVOKE_NOTIFICATION_CLICKED;
+import static com.android.permissioncontroller.PermissionControllerStatsLog.PERMISSION_USAGE_FRAGMENT_INTERACTION;
+import static com.android.permissioncontroller.PermissionControllerStatsLog.PERMISSION_USAGE_FRAGMENT_INTERACTION__ACTION__OPEN;
 
-import android.app.ActionBar;
+import android.Manifest;
+import android.annotation.TargetApi;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.PermissionInfo;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Process;
 import android.os.UserHandle;
+import android.permission.PermissionManager;
+import android.provider.Settings;
+import android.safetycenter.SafetyCenterManager;
+import android.safetycenter.SafetyEvent;
+import android.safetycenter.SafetySourceData;
 import android.util.Log;
 import android.view.MenuItem;
 
 import androidx.fragment.app.Fragment;
-import androidx.fragment.app.FragmentActivity;
 import androidx.navigation.NavGraph;
 import androidx.navigation.NavInflater;
 import androidx.navigation.Navigation;
 import androidx.navigation.fragment.NavHostFragment;
 
+import com.android.modules.utils.build.SdkLevel;
 import com.android.permissioncontroller.Constants;
 import com.android.permissioncontroller.DeviceUtils;
 import com.android.permissioncontroller.PermissionControllerStatsLog;
 import com.android.permissioncontroller.R;
-import com.android.permissioncontroller.permission.debug.PermissionDetailsFragment;
-import com.android.permissioncontroller.permission.debug.PermissionUsageV2Fragment;
-import com.android.permissioncontroller.permission.debug.UtilsKt;
+import com.android.permissioncontroller.hibernation.HibernationPolicyKt;
 import com.android.permissioncontroller.permission.ui.auto.AutoAllAppPermissionsFragment;
 import com.android.permissioncontroller.permission.ui.auto.AutoAppPermissionsFragment;
 import com.android.permissioncontroller.permission.ui.auto.AutoManageStandardPermissionsFragment;
 import com.android.permissioncontroller.permission.ui.auto.AutoPermissionAppsFragment;
+import com.android.permissioncontroller.permission.ui.auto.AutoReviewPermissionDecisionsFragment;
 import com.android.permissioncontroller.permission.ui.auto.AutoUnusedAppsFragment;
+import com.android.permissioncontroller.permission.ui.auto.dashboard.AutoPermissionUsageDetailsFragment;
+import com.android.permissioncontroller.permission.ui.auto.dashboard.AutoPermissionUsageFragment;
 import com.android.permissioncontroller.permission.ui.handheld.AppPermissionFragment;
 import com.android.permissioncontroller.permission.ui.handheld.AppPermissionGroupsFragment;
-import com.android.permissioncontroller.permission.ui.handheld.HandheldUnusedAppsFragment;
 import com.android.permissioncontroller.permission.ui.handheld.PermissionAppsFragment;
+import com.android.permissioncontroller.permission.ui.handheld.v31.PermissionDetailsWrapperFragment;
+import com.android.permissioncontroller.permission.ui.handheld.v31.PermissionUsageWrapperFragment;
+import com.android.permissioncontroller.permission.ui.handheld.v34.AppDataSharingUpdatesFragment;
 import com.android.permissioncontroller.permission.ui.legacy.AppPermissionActivity;
-import com.android.permissioncontroller.permission.ui.wear.AppPermissionsFragmentWear;
+import com.android.permissioncontroller.permission.ui.television.TvUnusedAppsFragment;
+import com.android.permissioncontroller.permission.ui.wear.WearAppPermissionFragment;
+import com.android.permissioncontroller.permission.ui.wear.WearPermissionUsageDetailsFragment;
+import com.android.permissioncontroller.permission.ui.wear.WearPermissionUsageFragment;
+import com.android.permissioncontroller.permission.ui.wear.WearUnusedAppsFragment;
 import com.android.permissioncontroller.permission.utils.KotlinUtils;
+import com.android.permissioncontroller.permission.utils.PermissionMapping;
 import com.android.permissioncontroller.permission.utils.Utils;
 
+import java.util.Objects;
 import java.util.Random;
 
-public final class ManagePermissionsActivity extends FragmentActivity {
+/**
+ * Activity to review and manage permissions
+ */
+public final class ManagePermissionsActivity extends SettingsActivity {
     private static final String LOG_TAG = ManagePermissionsActivity.class.getSimpleName();
 
+    /**
+     * Name of the extra parameter that indicates whether or not to show all app permissions
+     */
     public static final String EXTRA_ALL_PERMISSIONS =
             "com.android.permissioncontroller.extra.ALL_PERMISSIONS";
 
@@ -87,11 +116,36 @@ public final class ManagePermissionsActivity extends FragmentActivity {
             + ".permissioncontroller.extra.PERMISSION_RESULT";
 
     /**
+     * Whether to show system apps in UI receiving an intent containing this extra.
+     */
+    public static final String EXTRA_SHOW_SYSTEM = "com.android"
+            + ".permissioncontroller.extra.SHOW_SYSTEM";
+
+    /**
+     * Whether to show 7 days permission usage data in UI receiving an intent containing this extra.
+     */
+    public static final String EXTRA_SHOW_7_DAYS = "com.android"
+            + ".permissioncontroller.extra.SHOW_7_DAYS";
+
+    /**
+     * Name of the aliased activity.
+     */
+    public static final String ALIAS_ACTIVITY_NAME =
+            "com.android.permissioncontroller.permission.ui.ManagePermissionsActivityAlias";
+
+    /**
      * The requestCode used when we decide not to use this activity, but instead launch
      * another activity in our place. When that activity finishes, we set it's result
      * as our result and then finish.
      */
     private static final int PROXY_ACTIVITY_REQUEST_CODE = 5;
+
+    @TargetApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    private static final String LAUNCH_PERMISSION_SETTINGS =
+            Manifest.permission.LAUNCH_PERMISSION_SETTINGS;
+
+    @TargetApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    private static final String APP_PERMISSIONS_SETTINGS = Settings.ACTION_APP_PERMISSIONS_SETTINGS;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -102,10 +156,21 @@ public final class ManagePermissionsActivity extends FragmentActivity {
         }
         super.onCreate(savedInstanceState);
 
-        // If this is not a phone (which uses the Navigation component), and there is a previous
-        // instance, re-use its Fragment instead of making a new one.
-        if ((DeviceUtils.isTelevision(this) || DeviceUtils.isAuto(this)
-                || DeviceUtils.isWear(this)) && savedInstanceState != null) {
+        // If this is not a phone or a watch (which uses the Navigation component), and there
+        // is a previous instance, re-use its Fragment instead of making a new one.
+        if ((DeviceUtils.isTelevision(this) || DeviceUtils.isAuto(this))
+                && savedInstanceState != null) {
+            return;
+        }
+
+        boolean provisioned = Settings.Global.getInt(
+                getContentResolver(), Settings.Global.DEVICE_PROVISIONED, 0) != 0;
+        boolean completed = Settings.Secure.getInt(
+                getContentResolver(), Settings.Secure.USER_SETUP_COMPLETE, 0) != 0;
+        if (!provisioned || !completed) {
+            Log.e(LOG_TAG, "Device setup incomplete. device provisioned=" + provisioned
+                    + ", user setup complete=" + completed);
+            finishAfterTransition();
             return;
         }
 
@@ -124,6 +189,16 @@ public final class ManagePermissionsActivity extends FragmentActivity {
                 APP_PERMISSION_GROUPS_FRAGMENT_AUTO_REVOKE_ACTION__ACTION__OPENED_FOR_AUTO_REVOKE;
         int openFromIntentAction =
                 APP_PERMISSION_GROUPS_FRAGMENT_AUTO_REVOKE_ACTION__ACTION__OPENED_FROM_INTENT;
+
+        ComponentName component = getIntent().getComponent();
+        if (component != null
+                && Objects.equals(component.getClassName(), ALIAS_ACTIVITY_NAME)
+                && !Objects.equals(action, APP_PERMISSIONS_SETTINGS)) {
+            Log.w(LOG_TAG, ALIAS_ACTIVITY_NAME + " can only be launched with "
+                            + APP_PERMISSIONS_SETTINGS);
+            finishAfterTransition();
+            return;
+        }
 
         String permissionName;
         switch (action) {
@@ -147,57 +222,130 @@ public final class ManagePermissionsActivity extends FragmentActivity {
                 break;
 
             case Intent.ACTION_REVIEW_PERMISSION_USAGE: {
-                if (!UtilsKt.isPrivacyHubEnabled()) {
-                    finish();
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    finishAfterTransition();
                     return;
                 }
 
-                String groupName = getIntent().getStringExtra(Intent.EXTRA_PERMISSION_GROUP_NAME);
-                androidXFragment = PermissionUsageV2Fragment.newInstance(groupName, Long.MAX_VALUE);
+                PermissionControllerStatsLog.write(PERMISSION_USAGE_FRAGMENT_INTERACTION, sessionId,
+                        PERMISSION_USAGE_FRAGMENT_INTERACTION__ACTION__OPEN);
+                if (DeviceUtils.isAuto(this)) {
+                    androidXFragment = new AutoPermissionUsageFragment();
+                } else if (DeviceUtils.isWear(this)) {
+                    androidXFragment = WearPermissionUsageFragment.newInstance(sessionId);
+                } else {
+                    androidXFragment = PermissionUsageWrapperFragment.newInstance(
+                            Long.MAX_VALUE, sessionId);
+                }
             } break;
 
             case Intent.ACTION_REVIEW_PERMISSION_HISTORY: {
-                if (UtilsKt.isPrivacyHubEnabled()) {
-                    String groupName = getIntent()
-                            .getStringExtra(Intent.EXTRA_PERMISSION_GROUP_NAME);
-                    androidXFragment = PermissionDetailsFragment
-                            .newInstance(groupName, Long.MAX_VALUE);
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    finishAfterTransition();
+                    return;
                 }
 
+                String groupName = getIntent()
+                        .getStringExtra(Intent.EXTRA_PERMISSION_GROUP_NAME);
+                boolean showSystem = getIntent()
+                        .getBooleanExtra(EXTRA_SHOW_SYSTEM, false);
+                boolean show7Days = getIntent()
+                        .getBooleanExtra(EXTRA_SHOW_7_DAYS, false);
+                if (DeviceUtils.isAuto(this)) {
+                    androidXFragment = AutoPermissionUsageDetailsFragment.Companion.newInstance(
+                            groupName, showSystem, sessionId);
+                } else if (DeviceUtils.isWear(this)) {
+                    androidXFragment = WearPermissionUsageDetailsFragment
+                            .newInstance(groupName, showSystem, show7Days);
+                } else {
+                    androidXFragment = PermissionDetailsWrapperFragment
+                            .newInstance(groupName, Long.MAX_VALUE, showSystem, sessionId,
+                                    show7Days);
+                }
                 break;
             }
 
             case Intent.ACTION_MANAGE_APP_PERMISSION: {
-                if (DeviceUtils.isAuto(this) || DeviceUtils.isTelevision(this)
-                        || DeviceUtils.isWear(this)) {
+                if (DeviceUtils.isAuto(this) || DeviceUtils.isTelevision(this)) {
                     Intent compatIntent = new Intent(this, AppPermissionActivity.class);
                     compatIntent.putExtras(getIntent().getExtras());
                     startActivityForResult(compatIntent, PROXY_ACTIVITY_REQUEST_CODE);
                     return;
                 }
                 String packageName = getIntent().getStringExtra(Intent.EXTRA_PACKAGE_NAME);
+
+                if (packageName == null) {
+                    Log.i(LOG_TAG, "Missing mandatory argument EXTRA_PACKAGE_NAME");
+                    finishAfterTransition();
+                    return;
+                }
                 permissionName = getIntent().getStringExtra(Intent.EXTRA_PERMISSION_NAME);
                 String groupName = getIntent().getStringExtra(Intent.EXTRA_PERMISSION_GROUP_NAME);
+
+                if (permissionName == null && groupName == null) {
+                    Log.i(LOG_TAG, "Missing mandatory argument EXTRA_PERMISSION_NAME or"
+                            + "EXTRA_PERMISSION_GROUP_NAME");
+                    finishAfterTransition();
+                    return;
+                }
+
                 UserHandle userHandle = getIntent().getParcelableExtra(Intent.EXTRA_USER);
                 String caller = getIntent().getStringExtra(EXTRA_CALLER_NAME);
 
-                Bundle args = AppPermissionFragment.createArgs(packageName, permissionName,
-                        groupName, userHandle, caller, sessionId, null);
+                if (groupName == null) {
+                    groupName = getGroupFromPermission(permissionName);
+                }
+
+                if (groupName != null
+                        && groupName.equals(Manifest.permission_group.NOTIFICATIONS)) {
+                    // Redirect notification group to notification settings
+                    Utils.navigateToAppNotificationSettings(this, packageName, userHandle);
+                    finishAfterTransition();
+                    return;
+                }
+
+                Bundle args;
+                if (DeviceUtils.isWear(this)) {
+                    args = WearAppPermissionFragment.createArgs(packageName, permissionName,
+                            groupName, userHandle, caller, sessionId, null);
+                } else {
+                    args = AppPermissionFragment.createArgs(packageName, permissionName,
+                            groupName, userHandle, caller, sessionId, null);
+                }
                 setNavGraph(args, R.id.app_permission);
                 return;
             }
 
-            case Intent.ACTION_MANAGE_APP_PERMISSIONS: {
+            case Intent.ACTION_MANAGE_APP_PERMISSIONS:
+            case APP_PERMISSIONS_SETTINGS: {
+                if (!SdkLevel.isAtLeastV()
+                        && Objects.equals(action, APP_PERMISSIONS_SETTINGS)) {
+                    PermissionInfo permissionInfo;
+                    try {
+                        permissionInfo = getPackageManager()
+                                .getPermissionInfo(LAUNCH_PERMISSION_SETTINGS, 0);
+                    } catch (NameNotFoundException e) {
+                        permissionInfo = null;
+                    }
+                    if (permissionInfo == null
+                            || !Objects.equals(permissionInfo.packageName, Utils.OS_PKG)) {
+                        Log.w(LOG_TAG, LAUNCH_PERMISSION_SETTINGS
+                                + " must be defined by platform.");
+                        finishAfterTransition();
+                        return;
+                    }
+                }
+
                 String packageName = getIntent().getStringExtra(Intent.EXTRA_PACKAGE_NAME);
                 if (packageName == null) {
                     Log.i(LOG_TAG, "Missing mandatory argument EXTRA_PACKAGE_NAME");
-                    finish();
+                    finishAfterTransition();
                     return;
                 }
 
                 UserHandle userHandle = getIntent().getParcelableExtra(Intent.EXTRA_USER);
                 if (userHandle == null) {
-                    userHandle = UserHandle.of(UserHandle.myUserId());
+                    userHandle = Process.myUserHandle();
                 }
 
                 try {
@@ -235,54 +383,72 @@ public final class ManagePermissionsActivity extends FragmentActivity {
                 if (DeviceUtils.isAuto(this)) {
                     if (allPermissions) {
                         androidXFragment = AutoAllAppPermissionsFragment.newInstance(packageName,
-                                userHandle);
+                                userHandle, sessionId);
                     } else {
                         androidXFragment = AutoAppPermissionsFragment.newInstance(packageName,
-                                userHandle);
+                                userHandle, sessionId, /* isSystemPermsScreen= */ true);
                     }
-                } else if (DeviceUtils.isWear(this)) {
-                    androidXFragment = AppPermissionsFragmentWear.newInstance(packageName);
                 } else if (DeviceUtils.isTelevision(this)) {
                     androidXFragment = com.android.permissioncontroller.permission.ui.television
                             .AppPermissionsFragment.newInstance(packageName, userHandle);
                 } else {
                     Bundle args = AppPermissionGroupsFragment.createArgs(packageName, userHandle,
-                            sessionId, true);
+                            sessionId, /* isSystemPermsScreen= */  true);
                     setNavGraph(args, R.id.app_permission_groups);
                     return;
                 }
-            } break;
+                break;
+            }
 
             case Intent.ACTION_MANAGE_PERMISSION_APPS: {
                 permissionName = getIntent().getStringExtra(Intent.EXTRA_PERMISSION_NAME);
 
                 String permissionGroupName = getIntent().getStringExtra(
                         Intent.EXTRA_PERMISSION_GROUP_NAME);
+
                 if (permissionGroupName == null) {
                     try {
                         PermissionInfo permInfo = getPackageManager().getPermissionInfo(
                                 permissionName, 0);
-                        permissionGroupName = Utils.getGroupOfPermission(permInfo);
+                        permissionGroupName = PermissionMapping.getGroupOfPermission(permInfo);
                     } catch (PackageManager.NameNotFoundException e) {
                         Log.i(LOG_TAG, "Permission " + permissionName + " does not exist");
                     }
                 }
 
+                if (permissionGroupName == null) {
+                    permissionGroupName = permissionName;
+                }
+
                 if (permissionName == null && permissionGroupName == null) {
                     Log.i(LOG_TAG, "Missing mandatory argument EXTRA_PERMISSION_NAME or"
                             + "EXTRA_PERMISSION_GROUP_NAME");
-                    finish();
+                    finishAfterTransition();
                     return;
                 }
+
+                // Redirect notification group to notification settings
+                if (permissionGroupName.equals(Manifest.permission_group.NOTIFICATIONS)) {
+                    Utils.navigateToNotificationSettings(this);
+                    finishAfterTransition();
+                    return;
+                }
+
+                if (Utils.isHealthPermissionUiEnabled() && permissionGroupName
+                                .equals(HEALTH_PERMISSION_GROUP)) {
+                    Utils.navigateToHealthConnectSettings(this);
+                    finishAfterTransition();
+                    return;
+                }
+
                 if (DeviceUtils.isAuto(this)) {
-                    androidXFragment = AutoPermissionAppsFragment.newInstance(permissionName);
+                    androidXFragment =
+                            AutoPermissionAppsFragment.newInstance(permissionGroupName, sessionId);
                 } else if (DeviceUtils.isTelevision(this)) {
                     androidXFragment = com.android.permissioncontroller.permission.ui.television
-                            .PermissionAppsFragment.newInstance(permissionName);
+                            .PermissionAppsFragment.newInstance(permissionGroupName);
                 } else {
-
                     Bundle args = PermissionAppsFragment.createArgs(permissionGroupName, sessionId);
-                    args.putString(Intent.EXTRA_PERMISSION_NAME, permissionName);
                     setNavGraph(args, R.id.permission_apps);
                     return;
                 }
@@ -294,22 +460,72 @@ public final class ManagePermissionsActivity extends FragmentActivity {
                 Log.i(LOG_TAG, "sessionId " + sessionId + " starting auto revoke fragment"
                         + " from notification");
                 PermissionControllerStatsLog.write(AUTO_REVOKE_NOTIFICATION_CLICKED, sessionId);
+                if (SdkLevel.isAtLeastT()) {
+                    SafetyCenterManager safetyCenterManager =
+                            getSystemService(SafetyCenterManager.class);
+                    if (safetyCenterManager.isSafetyCenterEnabled()) {
+                        SafetySourceData data = safetyCenterManager.getSafetySourceData(
+                                UNUSED_APPS_SAFETY_CENTER_SOURCE_ID);
+                        if (data != null && !data.getIssues().isEmpty()) {
+                            // Clear source data as user has reviewed their unused apps
+                            HibernationPolicyKt.setUnusedAppsReviewNeeded(this, false);
+                            HibernationPolicyKt.rescanAndPushDataToSafetyCenter(this, sessionId,
+                                    new SafetyEvent.Builder(
+                                            SafetyEvent.SAFETY_EVENT_TYPE_SOURCE_STATE_CHANGED)
+                                            .build());
+                            HibernationPolicyKt.cancelUnusedAppsNotification(this);
+                        }
+                    }
+                }
 
                 if (DeviceUtils.isAuto(this)) {
                     androidXFragment = AutoUnusedAppsFragment.newInstance();
                     androidXFragment.setArguments(UnusedAppsFragment.createArgs(sessionId));
-                } else if (DeviceUtils.isWear(this) || DeviceUtils.isTelevision(this)) {
-                    androidXFragment = HandheldUnusedAppsFragment.newInstance();
+                } else if (DeviceUtils.isTelevision(this)) {
+                    androidXFragment = TvUnusedAppsFragment.newInstance();
                     androidXFragment.setArguments(UnusedAppsFragment.createArgs(sessionId));
+                } else if (DeviceUtils.isWear(this)) {
+                    setNavGraph(WearUnusedAppsFragment.createArgs(sessionId), R.id.auto_revoke);
+                    return;
                 } else {
                     setNavGraph(UnusedAppsFragment.createArgs(sessionId), R.id.auto_revoke);
+                    return;
+                }
+
+                break;
+            }
+            case PermissionManager.ACTION_REVIEW_PERMISSION_DECISIONS: {
+
+                UserHandle userHandle = getIntent().getParcelableExtra(Intent.EXTRA_USER);
+                if (userHandle == null) {
+                    userHandle = Process.myUserHandle();
+                }
+                if (DeviceUtils.isAuto(this)) {
+                    String source = getIntent().getStringExtra(
+                            AutoReviewPermissionDecisionsFragment.EXTRA_SOURCE);
+                    androidXFragment = AutoReviewPermissionDecisionsFragment.Companion
+                            .newInstance(sessionId, userHandle, source);
+                } else {
+                    Log.e(LOG_TAG, "ACTION_REVIEW_PERMISSION_DECISIONS is not "
+                            + "supported on this device type");
+                    finishAfterTransition();
+                    return;
+                }
+            } break;
+
+            case Intent.ACTION_REVIEW_APP_DATA_SHARING_UPDATES: {
+                if (KotlinUtils.INSTANCE.isSafetyLabelChangeNotificationsEnabled(this)) {
+                    setNavGraph(AppDataSharingUpdatesFragment.Companion.createArgs(sessionId),
+                            R.id.app_data_sharing_updates);
+                } else {
+                    finishAfterTransition();
                     return;
                 }
             } break;
 
             default: {
                 Log.w(LOG_TAG, "Unrecognized action " + action);
-                finish();
+                finishAfterTransition();
                 return;
             }
         }
@@ -323,6 +539,17 @@ public final class ManagePermissionsActivity extends FragmentActivity {
         }
     }
 
+    private String getGroupFromPermission(String permissionName) {
+        try {
+            PermissionInfo permInfo = getPackageManager().getPermissionInfo(
+                    permissionName, 0);
+            return PermissionMapping.getGroupOfPermission(permInfo);
+        } catch (PackageManager.NameNotFoundException e) {
+            Log.i(LOG_TAG, "Permission " + permissionName + " does not exist");
+        }
+        return null;
+    }
+
     private void setNavGraph(Bundle args, int startDestination) {
         setContentView(R.layout.nav_host_fragment);
         NavHostFragment navHost = (NavHostFragment) getSupportFragmentManager()
@@ -334,21 +561,13 @@ public final class ManagePermissionsActivity extends FragmentActivity {
     }
 
     @Override
-    public ActionBar getActionBar() {
-        ActionBar ab = super.getActionBar();
-        if (ab != null) {
-            ab.setHomeActionContentDescription(R.string.back);
-        }
-        return ab;
-    }
-
-    @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         // in automotive mode, there's no system wide back button, so need to add that
         if (DeviceUtils.isAuto(this)) {
             switch (item.getItemId()) {
                 case android.R.id.home:
                     onBackPressed();
+                    finishAfterTransition();
                     return true;
                 default:
                     return super.onOptionsItemSelected(item);
@@ -362,7 +581,8 @@ public final class ManagePermissionsActivity extends FragmentActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PROXY_ACTIVITY_REQUEST_CODE) {
             setResult(resultCode, data);
-            finish();
+            finishAfterTransition();
         }
     }
+
 }

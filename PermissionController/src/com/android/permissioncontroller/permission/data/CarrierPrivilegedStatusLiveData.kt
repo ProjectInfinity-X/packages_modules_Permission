@@ -26,12 +26,11 @@ import com.android.permissioncontroller.PermissionControllerApplication
  * @param app The current application
  * @param packageName The name of the package
  */
-class CarrierPrivilegedStatusLiveData private constructor(
-    private val app: Application,
-    private val packageName: String
-) : SmartUpdateMediatorLiveData<Int>() {
+class CarrierPrivilegedStatusLiveData
+private constructor(private val app: Application, private val packageName: String) :
+    SmartUpdateMediatorLiveData<Int>() {
 
-    val telephonyManager = app.getSystemService(TelephonyManager::class.java)!!
+    private val telephonyManager = app.getSystemService(TelephonyManager::class.java)!!
 
     override fun onUpdate() {
         value = telephonyManager.checkCarrierPrivilegesForPackageAnyPhone(packageName)
@@ -44,11 +43,11 @@ class CarrierPrivilegedStatusLiveData private constructor(
 
     /**
      * Repository for [CarrierPrivilegedStatusLiveData].
+     *
      * <p> Key value is a package name, value is its corresponding LiveData of
      * [android.telephony.Annotation.CarrierPrivilegeStatus]
      */
-    companion object
-        : DataRepository<String, CarrierPrivilegedStatusLiveData>() {
+    companion object : DataRepository<String, CarrierPrivilegedStatusLiveData>() {
         override fun newValue(key: String): CarrierPrivilegedStatusLiveData {
             return CarrierPrivilegedStatusLiveData(PermissionControllerApplication.get(), key)
         }

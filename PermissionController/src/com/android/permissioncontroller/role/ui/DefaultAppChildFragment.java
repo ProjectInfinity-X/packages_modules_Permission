@@ -39,8 +39,9 @@ import androidx.preference.TwoStatePreference;
 
 import com.android.permissioncontroller.R;
 import com.android.permissioncontroller.permission.utils.Utils;
-import com.android.permissioncontroller.role.model.Role;
-import com.android.permissioncontroller.role.model.Roles;
+import com.android.permissioncontroller.role.utils.RoleUiBehaviorUtils;
+import com.android.role.controller.model.Role;
+import com.android.role.controller.model.Roles;
 
 import java.util.List;
 import java.util.Objects;
@@ -168,7 +169,7 @@ public class DefaultAppChildFragment<PF extends PreferenceFragmentCompat
 
         Preference descriptionPreference = oldDescriptionPreference;
         if (descriptionPreference == null) {
-            descriptionPreference = preferenceFragment.createFooterPreference(context);
+            descriptionPreference = preferenceFragment.createFooterPreference();
             descriptionPreference.setKey(PREFERENCE_KEY_DESCRIPTION);
             descriptionPreference.setSummary(mRole.getDescriptionResource());
         }
@@ -195,20 +196,26 @@ public class DefaultAppChildFragment<PF extends PreferenceFragmentCompat
             @NonNull CharSequence title, boolean checked, @Nullable ApplicationInfo applicationInfo,
             @NonNull ArrayMap<String, Preference> oldPreferences,
             @NonNull PreferenceScreen preferenceScreen, @NonNull Context context) {
-        TwoStatePreference preference = (TwoStatePreference) oldPreferences.get(key);
-        if (preference == null) {
-            preference = requirePreferenceFragment().createApplicationPreference(context);
+        RoleApplicationPreference roleApplicationPreference =
+                (RoleApplicationPreference) oldPreferences.get(key);
+        TwoStatePreference preference;
+        if (roleApplicationPreference == null) {
+            roleApplicationPreference = requirePreferenceFragment().createApplicationPreference();
+            preference = roleApplicationPreference.asTwoStatePreference();
             preference.setKey(key);
             preference.setIcon(icon);
             preference.setTitle(title);
             preference.setPersistent(false);
             preference.setOnPreferenceChangeListener((preference2, newValue) -> false);
             preference.setOnPreferenceClickListener(this);
+        } else {
+            preference = roleApplicationPreference.asTwoStatePreference();
         }
 
         preference.setChecked(checked);
         if (applicationInfo != null) {
-            mRole.prepareApplicationPreferenceAsUser(preference, applicationInfo, mUser, context);
+            RoleUiBehaviorUtils.prepareApplicationPreferenceAsUser(mRole, roleApplicationPreference,
+                    applicationInfo, mUser, context);
         }
 
         preferenceScreen.addPreference(preference);
@@ -238,8 +245,9 @@ public class DefaultAppChildFragment<PF extends PreferenceFragmentCompat
             mViewModel.setNoneDefaultApp();
         } else {
             String packageName = key;
-            CharSequence confirmationMessage = mRole.getConfirmationMessage(packageName,
-                    requireContext());
+            CharSequence confirmationMessage =
+                    RoleUiBehaviorUtils.getConfirmationMessage(mRole, packageName,
+                            requireContext());
             if (confirmationMessage != null) {
                 DefaultAppConfirmationDialogFragment.show(packageName, confirmationMessage, this);
             } else {
@@ -275,22 +283,18 @@ public class DefaultAppChildFragment<PF extends PreferenceFragmentCompat
         /**
          * Create a new preference for an application.
          *
-         * @param context the {@code Context} to use when creating the preference.
-         *
          * @return a new preference for an application
          */
         @NonNull
-        TwoStatePreference createApplicationPreference(@NonNull Context context);
+        RoleApplicationPreference createApplicationPreference();
 
         /**
          * Create a new preference for the footer.
          *
-         * @param context the {@code Context} to use when creating the preference.
-         *
          * @return a new preference for the footer
          */
         @NonNull
-        Preference createFooterPreference(@NonNull Context context);
+        Preference createFooterPreference();
 
         /**
          * Callback when changes have been made to the {@link PreferenceScreen} of the parent

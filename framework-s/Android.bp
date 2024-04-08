@@ -18,12 +18,26 @@ package {
 
 filegroup {
     name: "framework-permission-s-sources",
+    defaults: ["framework-sources-module-defaults"],
     srcs: [
         "java/**/*.java",
         "java/**/*.aidl",
     ],
     path: "java",
-    visibility: ["//frameworks/base"],
+}
+
+filegroup {
+    name: "safetycenter-config-api-sources",
+    srcs: ["java/android/safetycenter/config/*.java"],
+    path: "java",
+    visibility: ["//packages/modules/Permission/SafetyCenter/ConfigLintChecker"],
+}
+
+filegroup {
+    name: "safetycenter-config-schemas",
+    srcs: ["java/android/safetycenter/config/safety_center_config*.xsd"],
+    path: "java/android/safetycenter/config/",
+    visibility: ["//packages/modules/Permission/SafetyCenter/ConfigLintChecker"],
 }
 
 java_library {
@@ -42,6 +56,11 @@ java_library {
     sdk_version: "module_current",
 }
 
+platform_compat_config {
+    name: "framework-permission-s-compat-config",
+    src: ":framework-permission-s",
+}
+
 java_sdk_library {
     name: "framework-permission-s",
     defaults: ["framework-module-defaults"],
@@ -49,11 +68,14 @@ java_sdk_library {
         ":framework-permission-s-sources",
     ],
     libs: [
+        "androidx.annotation_annotation",
+        "app-compat-annotations",
         "framework-annotations-lib",
-        "modules-annotation-minsdk",
     ],
     static_libs: [
         "framework-permission-s-shared",
+        "modules-utils-build",
+        "android.permission.flags-aconfig-java",
     ],
     apex_available: [
         "com.android.permission",
@@ -66,12 +88,24 @@ java_sdk_library {
         "//packages/modules/Permission:__subpackages__",
     ],
     installable: true,
-    jarjar_rules: ":permission-jarjar-rules",
-    min_sdk_version: "30",
+    jarjar_rules: "jarjar-rules.txt",
+    lint: {
+        strict_updatability_linting: true,
+    },
+    min_sdk_version: "31",
     permitted_packages: [
         "android.permission",
         "android.app.role",
-        // For com.android.permission.jarjar.
-        "com.android.permission",
+        "android.safetycenter",
+        "android.safetylabel",
+    ],
+}
+
+java_api_contribution {
+    name: "framework-permission-s-public-stubs",
+    api_surface: "public",
+    api_file: "api/current.txt",
+    visibility: [
+        "//build/orchestrator/apis",
     ],
 }

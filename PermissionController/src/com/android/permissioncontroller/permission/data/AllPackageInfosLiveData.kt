@@ -20,9 +20,7 @@ import android.os.UserHandle
 import com.android.permissioncontroller.permission.data.AllPackageInfosLiveData.addSource
 import com.android.permissioncontroller.permission.model.livedatatypes.LightPackageInfo
 
-/**
- * A LiveData which tracks the PackageInfos of all of the packages in the system, for all users.
- */
+/** A LiveData which tracks the PackageInfos of all of the packages in the system, for all users. */
 object AllPackageInfosLiveData :
     SmartUpdateMediatorLiveData<Map<UserHandle, List<LightPackageInfo>>>() {
 
@@ -30,28 +28,26 @@ object AllPackageInfosLiveData :
     private val userPackageInfos = mutableMapOf<UserHandle, List<LightPackageInfo>>()
 
     init {
-        addSource(UsersLiveData) {
-            update()
-        }
+        addSource(UsersLiveData) { update() }
     }
 
     override fun onUpdate() {
         UsersLiveData.value?.let { users ->
             val getLiveData = { user: UserHandle -> UserPackageInfosLiveData[user] }
-            setSourcesToDifference(users, userPackageInfosLiveDatas, getLiveData) { user ->
-                onUserPackageUpdates(user, userPackageInfosLiveDatas[user]?.value)
+            setSourcesToDifference(users, userPackageInfosLiveDatas, getLiveData)
+        }
+        if (!userPackageInfosLiveDatas.all { it.value.isInitialized }) {
+            return
+        }
+
+        for ((user, userPackageInfosLiveData) in userPackageInfosLiveDatas) {
+            val packageInfos = userPackageInfosLiveData.value
+            if (packageInfos == null) {
+                userPackageInfos.remove(user)
+            } else {
+                userPackageInfos[user] = packageInfos
             }
         }
-    }
-
-    private fun onUserPackageUpdates(user: UserHandle, packageInfos: List<LightPackageInfo>?) {
-        if (packageInfos == null) {
-            userPackageInfos.remove(user)
-        } else {
-            userPackageInfos[user] = packageInfos
-        }
-        if (userPackageInfosLiveDatas.all { it.value.isInitialized }) {
-            value = userPackageInfos.toMap()
-        }
+        value = userPackageInfos.toMap()
     }
 }
